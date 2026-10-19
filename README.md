@@ -1,5 +1,22 @@
 # STS2 RL Agent
 
+## Local configurable training
+
+To watch a saved Act 1 model in the real Steam game, run `Watch-Model.cmd`.
+It opens Play/Pause/Step/skip controls and uses the experiment selected in
+`local/config/watch.json`. See [Watching the real game](docs/WATCH_REAL_GAME.md).
+
+Edit `local/config/training.json`, then run `Train-Run.cmd` to train Ironclad on a fixed
+Act 1 simulator seed. Presets in `local/config/presets/` also support random seeds, seed
+pools, and the original combat task. Each experiment saves separate models,
+its resolved configuration, and evaluation results.
+See [Configurable training](docs/CONFIGURABLE_TRAINING.md) for settings and commands.
+
+Training uses SpireFormer, an object-based Transformer policy that sees the deck,
+relics, map paths, rewards and shop items (`model.type: "entity"`). The flat MLP
+remains available as a baseline with `model.type: "flat"`. See [Entity policy](docs/ENTITY_POLICY.md).
+
+
 A reinforcement learning agent for **Slay the Spire 2**, built on a high-performance headless combat simulator and a Gymnasium training environment. Includes a C# bridge mod for connecting the trained agent to the real game.
 
 ## Architecture
