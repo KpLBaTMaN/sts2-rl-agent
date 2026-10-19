@@ -248,6 +248,13 @@ class STS2RunEnv(gymnasium.Env):
         as a loss.
     render_mode : str or None
         ``"ansi"`` for text rendering.
+    act_count : int or None
+        Optional objective ending on that act's boss defeat. None keeps the
+        original full-run completion rules. Double-boss objectives are not validated.
+    start_with_neow : bool
+        Include the opening event instead of starting at the map.
+    raise_simulation_errors : bool
+        Propagate simulator bugs instead of converting exceptions into losses.
     """
 
     metadata = {"render_modes": ["ansi"]}
@@ -259,6 +266,9 @@ class STS2RunEnv(gymnasium.Env):
         max_steps: int = DEFAULT_MAX_STEPS,
         max_combat_turns: int = DEFAULT_MAX_COMBAT_TURNS,
         render_mode: str | None = None,
+        act_count: int | None = None,
+        start_with_neow: bool = False,
+        raise_simulation_errors: bool = False,
     ):
         super().__init__()
 
@@ -275,6 +285,11 @@ class STS2RunEnv(gymnasium.Env):
         self.max_steps = max_steps
         self.max_combat_turns = max_combat_turns
         self.render_mode = render_mode
+        if act_count is not None and act_count not in (1, 2, 3):
+            raise ValueError("act_count must be 1, 2, 3, or None")
+        self.act_count = act_count
+        self.start_with_neow = start_with_neow
+        self.raise_simulation_errors = raise_simulation_errors
 
         # Mutable state -- set during reset()
         self._mgr: RunManager | None = None
@@ -291,11 +306,15 @@ class STS2RunEnv(gymnasium.Env):
     ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
 
-        run_seed = int(self.np_random.integers(0, INT_MAX_EXCLUSIVE))
+        # Configured runs can use the actual simulator seed directly.
+        run_seed = (options or {}).get("run_seed")
+        if run_seed is None:
+            run_seed = int(self.np_random.integers(0, INT_MAX_EXCLUSIVE))
         self._mgr = RunManager(
             seed=run_seed,
             character_id=self._character_id,
             ascension_level=self._ascension_level,
+            start_with_neow=self.start_with_neow,
         )
         self._step_count = 0
 
@@ -310,6 +329,13 @@ class STS2RunEnv(gymnasium.Env):
         self._step_count += 1
 
         reward = 0.0
+        previous_combat = self._mgr.get_combat_state()
+        final_boss = (
+            self.act_count is not None
+            and self._mgr.run_state.current_act_index == self.act_count - 1
+            and self._mgr._current_room_type == RoomType.BOSS
+            and self._mgr.phase == RunManager.PHASE_COMBAT
+        )
         phase = self._mgr.phase
         actions = self._mgr.get_available_actions()
 
@@ -334,11 +360,19 @@ class STS2RunEnv(gymnasium.Env):
             elif phase == RunManager.PHASE_TREASURE:
                 self._step_treasure()
         except Exception:
+            if self.raise_simulation_errors:
+                raise
             # Guard against simulation bugs so the episode can finish.
             # Force-end as a loss if the run is not already over.
             logger.exception("STS2RunEnv.step failed during phase %s with action %s", phase, action)
             if not self._mgr.is_over:
                 self._mgr.run_state.lose_run()
+
+        # A configured act objective ends on boss victory, before reward screens.
+        if (final_boss and previous_combat is not None
+                and previous_combat.is_over and previous_combat.player_won
+                and not self._mgr.run_state.player.is_dead):
+            self._mgr.run_state.win_run()
 
         # ---- terminal conditions ----
         terminated = self._mgr.is_over
