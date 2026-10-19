@@ -1,0 +1,6 @@
+{
+  "description": "Objective result only: +1 win, -1 death or timeout. Matches training before reward profiles existed.",
+  "win": 1.0,
+  "death": -1.0,
+  "timeout": -1.0
+}

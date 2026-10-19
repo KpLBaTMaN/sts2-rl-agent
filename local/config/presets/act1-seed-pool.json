@@ -1,0 +1,23 @@
+{
+  "name": "act1-three-seeds",
+  "task": "act1",
+  "reward": "sparse",
+  "seeds": {
+    "mode": "pool",
+    "values": [
+      42,
+      123,
+      456
+    ]
+  },
+  "evaluation": {
+    "mode": "unseen",
+    "seeds": [
+      10000,
+      10001,
+      10002,
+      10003,
+      10004
+    ]
+  }
+}

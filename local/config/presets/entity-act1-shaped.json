@@ -1,0 +1,35 @@
+{
+  "name": "entity-act1-shaped",
+  "task": "act1",
+  "reward": "shaped",
+  "character": "Ironclad",
+  "seeds": {
+    "mode": "random",
+    "schedule_seed": 123
+  },
+  "model": {
+    "type": "entity",
+    "d_model": 128,
+    "layers": 3,
+    "heads": 4
+  },
+  "training": {
+    "total_timesteps": 1000000,
+    "n_envs": 16,
+    "n_steps": 256,
+    "batch_size": 512,
+    "n_epochs": 4,
+    "gamma": 0.995,
+    "ent_coef": 0.01,
+    "learning_rate": 0.0003,
+    "device": "cuda",
+    "checkpoint_every": 250000
+  },
+  "evaluation": {
+    "mode": "unseen",
+    "every_steps": 100000,
+    "episodes": 50,
+    "final_episodes": 100,
+    "random_baseline_episodes": 50
+  }
+}

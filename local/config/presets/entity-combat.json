@@ -1,0 +1,32 @@
+{
+  "name": "entity-combat",
+  "task": "combat",
+  "reward": "sparse",
+  "seeds": {
+    "mode": "random"
+  },
+  "model": {
+    "type": "entity",
+    "d_model": 128,
+    "layers": 3,
+    "heads": 4
+  },
+  "training": {
+    "total_timesteps": 500000,
+    "n_envs": 16,
+    "n_steps": 256,
+    "batch_size": 512,
+    "n_epochs": 4,
+    "gamma": 0.99,
+    "ent_coef": 0.01,
+    "learning_rate": 0.0003,
+    "device": "cuda"
+  },
+  "evaluation": {
+    "mode": "unseen",
+    "every_steps": 50000,
+    "episodes": 100,
+    "final_episodes": 500,
+    "random_baseline_episodes": 100
+  }
+}

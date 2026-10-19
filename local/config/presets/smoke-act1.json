@@ -1,0 +1,29 @@
+{
+  "name": "smoke-act1",
+  "task": "act1",
+  "reward": "sparse",
+  "seeds": {
+    "mode": "fixed",
+    "values": [
+      42
+    ]
+  },
+  "training": {
+    "total_timesteps": 1024,
+    "n_envs": 2,
+    "n_steps": 64,
+    "batch_size": 64,
+    "n_epochs": 1,
+    "hidden_sizes": [
+      64,
+      64
+    ],
+    "checkpoint_every": 512
+  },
+  "evaluation": {
+    "every_steps": 512,
+    "episodes": 2,
+    "final_episodes": 3,
+    "random_baseline_episodes": 2
+  }
+}

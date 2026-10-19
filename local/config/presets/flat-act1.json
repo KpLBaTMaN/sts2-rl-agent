@@ -1,0 +1,36 @@
+{
+  "name": "flat-act1",
+  "task": "act1",
+  "reward": "sparse",
+  "character": "Ironclad",
+  "seeds": {
+    "mode": "random",
+    "schedule_seed": 123
+  },
+  "model": {
+    "type": "flat"
+  },
+  "training": {
+    "total_timesteps": 1000000,
+    "n_envs": 16,
+    "n_steps": 256,
+    "batch_size": 512,
+    "n_epochs": 4,
+    "gamma": 0.995,
+    "ent_coef": 0.01,
+    "learning_rate": 0.0003,
+    "hidden_sizes": [
+      256,
+      256
+    ],
+    "device": "cpu",
+    "checkpoint_every": 250000
+  },
+  "evaluation": {
+    "mode": "unseen",
+    "every_steps": 100000,
+    "episodes": 50,
+    "final_episodes": 100,
+    "random_baseline_episodes": 50
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "smoke-entity",
+  "task": "combat",
+  "reward": "sparse",
+  "seeds": {
+    "mode": "random"
+  },
+  "model": {
+    "type": "entity",
+    "d_model": 64,
+    "layers": 2,
+    "heads": 4
+  },
+  "training": {
+    "total_timesteps": 2048,
+    "n_envs": 4,
+    "n_steps": 128,
+    "batch_size": 128,
+    "n_epochs": 2,
+    "gamma": 0.99,
+    "device": "auto",
+    "checkpoint_every": 1024
+  },
+  "evaluation": {
+    "mode": "unseen",
+    "every_steps": 1024,
+    "episodes": 5,
+    "final_episodes": 10,
+    "random_baseline_episodes": 5
+  }
+}

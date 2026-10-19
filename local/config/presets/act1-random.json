@@ -1,0 +1,12 @@
+{
+  "name": "act1-random",
+  "task": "act1",
+  "reward": "sparse",
+  "seeds": {
+    "mode": "random",
+    "schedule_seed": 123
+  },
+  "evaluation": {
+    "mode": "unseen"
+  }
+}

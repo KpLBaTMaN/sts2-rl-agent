@@ -1,0 +1,35 @@
+Slay the Spire 2 AI — local setup
+
+Double-click Play-AI.cmd to launch the game through Steam and connect the trained agent.
+For the new Act 1 model, use Watch-Model.cmd instead. Edit local/config/watch.json to select an experiment and final/best model. Browser controls appear at http://127.0.0.1:8766/.
+See docs/WATCH_REAL_GAME.md for step/pause/skip controls and simulator-to-game limitations.
+Close any existing Slay the Spire 2 window first. Accept the game's mod prompt if shown.
+Close the game to stop play. Ctrl+C stops the Python agent; close the game too because the bridge can fall back to random actions without a client.
+
+Train.cmd starts a new 500,000-step Ironclad combat training run.
+Train-Run.cmd uses local/config/training.json for a configurable experiment (default: Act 1, fixed simulator seed 42).
+See docs/CONFIGURABLE_TRAINING.md and local/config/presets/ for random-seed, seed-pool, combat and diagnostic presets.
+Training-Logs.cmd serves TensorBoard locally at http://127.0.0.1:6006.
+Python and dependencies are in .venv; no terminal activation is required by the launchers.
+
+Model: output/combat_ppo/best_model/best_model.zip
+Final model: output/combat_ppo/final_model.zip
+Training log: output/training.log
+Recorded game traces: output/setup-game-replay.json and output/last-game-replay.json
+Pinned dependency list: local/requirements-local-lock.txt
+
+Installed game: E:/SteamLibrary/steamapps/common/Slay the Spire 2 (v0.107.1).
+Installed mods: STS2BridgeMod and BaseLib, under the game's mods directory.
+AI automation is enabled only when launched with --sts2-rl (Play-AI.cmd).
+AI save directory: %APPDATA%/SlayTheSpire2/steam/<account>/modded/rl-agent/profile<id>.
+Original saves and mod settings were backed up to local/backups/sts2-before-ai.zip.
+
+The initial training run completed 507,904 steps (PPO rounds up to complete its last rollout).
+The final model won 83/100 held-out simulator combats. This is not a full-run win rate.
+Combat is learned; the combat model uses scripted heuristics for map/rewards/shops/events.
+Training uses CPU with four environments and four PyTorch threads for the small MLP.
+CUDA-enabled PyTorch 2.11.0+cu128 is installed. training.json uses CUDA on the RTX 4090; the original combat launcher still selects CPU explicitly.
+
+Compatibility changes are recorded in local/notes/MODLOG.md. This is a local checkout, not a published fork.
+
+

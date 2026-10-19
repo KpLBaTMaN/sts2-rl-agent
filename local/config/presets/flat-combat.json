@@ -1,0 +1,33 @@
+{
+  "name": "flat-combat",
+  "task": "combat",
+  "reward": "sparse",
+  "seeds": {
+    "mode": "random"
+  },
+  "model": {
+    "type": "flat"
+  },
+  "training": {
+    "total_timesteps": 500000,
+    "n_envs": 16,
+    "n_steps": 256,
+    "batch_size": 512,
+    "n_epochs": 4,
+    "gamma": 0.99,
+    "ent_coef": 0.01,
+    "learning_rate": 0.0003,
+    "hidden_sizes": [
+      256,
+      256
+    ],
+    "device": "cpu"
+  },
+  "evaluation": {
+    "mode": "unseen",
+    "every_steps": 50000,
+    "episodes": 100,
+    "final_episodes": 500,
+    "random_baseline_episodes": 100
+  }
+}

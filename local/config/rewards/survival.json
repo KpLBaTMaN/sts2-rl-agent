@@ -1,0 +1,14 @@
+{
+  "description": "Shaped, but HP loss costs twice as much and elites pay less. For agents that die from reckless play.",
+  "win": 5.0,
+  "death": -1.5,
+  "timeout": -1.0,
+  "floor": 0.1,
+  "hp": 2.0,
+  "hp_curve": "dota",
+  "elite": 0.15,
+  "enemy_damage": 0.05,
+  "max_hp": 0.02,
+  "relic": 0.05,
+  "gold": 0.0
+}

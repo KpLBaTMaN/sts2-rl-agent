@@ -1,0 +1,22 @@
+{
+  "name": "default-combat",
+  "task": "combat",
+  "reward": "sparse",
+  "seeds": {
+    "mode": "random"
+  },
+  "training": {
+    "gamma": 0.99,
+    "ent_coef": 0.01,
+    "hidden_sizes": [
+      64,
+      64
+    ]
+  },
+  "evaluation": {
+    "mode": "unseen",
+    "every_steps": 10000,
+    "episodes": 20,
+    "final_episodes": 100
+  }
+}

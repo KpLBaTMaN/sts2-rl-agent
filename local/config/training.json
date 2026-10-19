@@ -1,0 +1,58 @@
+{
+  "name": "act1-seed42",
+  "task": "act1",
+  "reward": "shaped",
+  "character": "Ironclad",
+  "ascension": 0,
+  "start_with_neow": false,
+  "seeds": {
+    "mode": "fixed",
+    "values": [
+      42
+    ],
+    "schedule_seed": 123
+  },
+  "training": {
+    "total_timesteps": 500000,
+    "n_envs": 16,
+    "model_seed": 42,
+    "learning_rate": 0.0003,
+    "n_steps": 256,
+    "batch_size": 512,
+    "n_epochs": 4,
+    "gamma": 0.995,
+    "ent_coef": 0.02,
+    "hidden_sizes": [
+      256,
+      256
+    ],
+    "device": "cuda",
+    "torch_threads": 4,
+    "max_episode_steps": 2000,
+    "max_combat_turns": 200,
+    "checkpoint_every": 100000
+  },
+  "evaluation": {
+    "mode": "training_seeds",
+    "seeds": [
+      10000,
+      10001,
+      10002,
+      10003,
+      10004
+    ],
+    "every_steps": 20000,
+    "episodes": 1,
+    "final_episodes": 1,
+    "deterministic": true,
+    "random_baseline_episodes": 10
+  },
+  "output_root": "output/experiments",
+  "resume_from": null,
+  "model": {
+    "type": "entity",
+    "d_model": 128,
+    "layers": 3,
+    "heads": 4
+  }
+}
