@@ -1,0 +1,13 @@
+{
+  "description": "Version 2 of shaped: dying costs -5 (was -1) and reaching a floor pays nothing (was +0.1). Other weights unchanged.",
+  "win": 5.0,
+  "death": -5.0,
+  "timeout": -1.0,
+  "hp": 1.0,
+  "hp_curve": "dota",
+  "elite": 0.3,
+  "enemy_damage": 0.05,
+  "max_hp": 0.01,
+  "relic": 0.05,
+  "gold": 0.0
+}

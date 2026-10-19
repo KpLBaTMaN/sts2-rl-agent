@@ -1,0 +1,6 @@
+{
+  "description": "Version 2 of sparse: dying costs -5 (was -1). +1 win and -1 timeout are unchanged; sparse never paid for floors.",
+  "win": 1.0,
+  "death": -5.0,
+  "timeout": -1.0
+}

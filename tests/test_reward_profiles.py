@@ -44,6 +44,14 @@ def test_builtin_profiles_work_without_local_files(monkeypatch, tmp_path):
         resolve_reward(config(reward="missing"))
 
 
+@pytest.mark.parametrize("name", ["sparse", "shaped", "survival", "deckbuilder"])
+def test_v2_profiles_punish_death_and_drop_the_floor_reward(name):
+    v1, v2 = resolve_reward(config(reward=name)), resolve_reward(config(reward=f"{name}-v2"))
+    assert v2["death"] == -5 and v2["floor"] == 0
+    unchanged = lambda r: {k: v for k, v in r.items() if k not in ("death", "floor", "profile", "description")}  # noqa: E731
+    assert unchanged(v2) == unchanged(v1)
+
+
 @pytest.mark.parametrize("bad", [
     {"reward": {"wins": 1}},
     {"reward": {"win": "big"}},

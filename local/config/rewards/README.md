@@ -22,6 +22,23 @@ If `reward` is omitted: `combat` uses `sparse`, `act1`/`full_run` use `shaped`.
 
 Keep total shaping over an episode below `win`, so climbing floors never pays more than winning.
 
+## Version 2 profiles
+
+Each profile has a `-v2` copy (`"reward": "shaped-v2"`, `deckbuilder-v2`,
+`survival-v2`, `sparse-v2`) with two changes; every other weight is the same:
+
+| Change | v1 | v2 |
+|---|---|---|
+| `death` | -1 (survival: -1.5) | -5 |
+| `floor` | +0.1 per floor (sparse: none) | none |
+
+Dying now costs as much as winning pays, and simply reaching more floors earns
+nothing; progress has to show up as HP kept, elites and enemies beaten, relics
+and the result. `timeout` stays at -1, so an episode that runs out of steps now
+costs 4 less than dying. Watch timeouts and stalls when comparing v1 and v2.
+The v1 files and the task defaults (`sparse` for combat, `shaped` for runs)
+are unchanged.
+
 ## Combat tempo experiment
 
 `combat_turn` is a small cost for each extra turn a fight takes. It targets
