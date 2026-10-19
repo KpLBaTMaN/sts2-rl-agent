@@ -61,12 +61,14 @@ class MinionPower(PowerInstance):
     - ShouldOwnerDeathTriggerFatal: false
     StackType.Single. Non-stacking flag.
 
-    Minions do not count for combat victory; killing them does not end
-    the fight. The combat system checks for this power.
+    Secondary enemies do not keep combat going: combat ends once no
+    primary enemy is alive, and when the last primary enemy dies its
+    surviving secondary teammates are killed (CreatureCmd.Kill).
     """
 
     power_type = PowerType.BUFF
     stack_type = PowerStackType.SINGLE
+    owner_is_secondary_enemy = True
 
     def __init__(self, amount: int = 1):
         super().__init__(PowerId.MINION, amount)
@@ -665,13 +667,6 @@ class IllusionPower(PowerInstance):
         owner.current_hp = owner.max_hp
         owner.escaped = False
         owner._death_processed = False
-
-    def should_stop_combat_ending(
-        self,
-        owner: Creature | None = None,
-        combat: CombatState | None = None,
-    ) -> bool:
-        return self.is_reviving
 
     def should_allow_hitting(self, owner: Creature, combat: CombatState) -> bool:
         return not self.is_reviving

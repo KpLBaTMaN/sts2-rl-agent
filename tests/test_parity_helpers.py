@@ -156,7 +156,7 @@ from sts2_env.monsters.act2 import (
     create_decimillipede_segment,
     create_rocket,
 )
-from sts2_env.monsters.act1 import create_eye_with_teeth, create_parafright
+from sts2_env.monsters.act1 import create_eye_with_teeth, create_fogmog, create_parafright
 from sts2_env.monsters.act3 import create_door
 from sts2_env.monsters.act3 import (
     TEST_SUBJECT_MULTI_CLAW_MOVE,
@@ -963,7 +963,7 @@ class TestUntargetableReviveStates:
         assert enemy not in combat.hittable_enemies
         assert combat._resolve_target(strike, 0) is None  # noqa: SLF001
 
-    def test_illusion_power_enters_revive_move_and_blocks_combat_end(self):
+    def test_illusion_power_enters_revive_move_while_primary_enemy_alive(self):
         combat = CombatState(
             player_hp=80,
             player_max_hp=80,
@@ -971,6 +971,10 @@ class TestUntargetableReviveStates:
             rng_seed=91,
             character_id="Ironclad",
         )
+        # IllusionPower does not stop combat ending (C# has no override);
+        # the fight continues only because Fogmog, a primary enemy, is alive.
+        fogmog, fogmog_ai = create_fogmog(Rng(91))
+        combat.add_enemy(fogmog, fogmog_ai)
         eye, eye_ai = create_eye_with_teeth(Rng(91))
         combat.add_enemy(eye, eye_ai)
         combat.start_combat()

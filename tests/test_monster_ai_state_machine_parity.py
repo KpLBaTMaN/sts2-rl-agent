@@ -2550,6 +2550,9 @@ class TestFixedRotation:
         creature, ai = create_kin_follower(Rng(rng_seed))
         dance_creature, dance_ai = create_kin_follower(Rng(rng_seed), starts_with_dance=True)
         combat.add_enemy(creature, ai)
+        # Followers are minions: a primary enemy must be alive for combat to continue.
+        priest, priest_ai = create_kin_priest(Rng(rng_seed))
+        combat.add_enemy(priest, priest_ai)
 
         assert 58 <= creature.max_hp <= 59
         assert creature.get_power_amount(PowerId.MINION) == minion_amount

@@ -30,6 +30,7 @@ class PowerInstance:
     allow_negative: bool = False
     is_temporary: bool = False
     should_scale_in_multiplayer: bool = False
+    owner_is_secondary_enemy: bool = False
 
     def __init__(self, power_id: PowerId, amount: int):
         self.power_id = power_id

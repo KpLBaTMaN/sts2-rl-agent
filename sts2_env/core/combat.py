@@ -161,6 +161,7 @@ class CombatState:
         # Enemies
         self.enemies: list[Creature] = []
         self.enemy_ais: dict[int, MonsterAI] = {}
+        self._defer_combat_end_check: int = 0
         self.allies: list[Creature] = []
         self.osty: Creature | None = None
         self._ally_player_zones: dict[Creature, dict[str, list[CardInstance]]] = {}
@@ -3057,6 +3058,13 @@ class CombatState:
                 on_ally_death = getattr(power, "on_ally_death", None)
                 if callable(on_ally_death):
                     on_ally_death(listener, creature, self, was_removal_prevented)
+        # C# CreatureCmd.KillWithoutCheckingWinCondition: teammates are read
+        # after AfterDeath, and primary status before powers are stripped.
+        surviving_teammates = [
+            teammate for teammate in self.get_teammates_of(creature)
+            if teammate is not creature and teammate.is_alive
+        ] if creature.side == CombatSide.ENEMY else []
+        was_primary_enemy = creature.is_primary_enemy
         for power_id, remove_power in should_remove_power.items():
             if remove_power and power_id in creature.powers:
                 self._remove_power(creature, power_id)
@@ -3069,8 +3077,27 @@ class CombatState:
                     after_death(state.creature, creature, self)
         self._fire_card_after_death(creature, was_removal_prevented)
         self._sync_monster_death_move_responses(creature)
+        if (
+            was_primary_enemy
+            and surviving_teammates
+            and all(teammate.is_secondary_enemy for teammate in surviving_teammates)
+        ):
+            self._kill_secondary_teammates(surviving_teammates)
         self._check_combat_end()
         return True
+
+    def _kill_secondary_teammates(self, teammates: list[Creature]) -> None:
+        """C# CreatureCmd.Kill(teammates) once the last primary enemy dies.
+
+        Each minion dies through the normal death pipeline (death hooks fire);
+        the win check waits until all of them are dead.
+        """
+        self._defer_combat_end_check += 1
+        try:
+            for teammate in teammates:
+                self.kill_creature(teammate)
+        finally:
+            self._defer_combat_end_check -= 1
 
     def _fire_card_after_death(self, creature: Creature, was_removal_prevented: bool) -> None:
         from sts2_env.cards.registry import fire_card_after_death
@@ -3841,6 +3868,9 @@ class CombatState:
             except TypeError:
                 return bool(should_stop())
 
+        if self._defer_combat_end_check:
+            return
+
         blocking_dead_enemies = [
             enemy
             for enemy in self.enemies
@@ -3849,7 +3879,9 @@ class CombatState:
                 for power in enemy.powers.values()
             )
         ]
-        if not self.alive_enemies and not blocking_dead_enemies:
+        # C# CombatManager.IsEnding: only living primary enemies keep combat going.
+        alive_primary_enemies = [enemy for enemy in self.alive_enemies if enemy.is_primary_enemy]
+        if not alive_primary_enemies and not blocking_dead_enemies:
             self._end_combat(player_won=True)
         elif self.primary_player.is_dead:
             self._end_combat(player_won=False)

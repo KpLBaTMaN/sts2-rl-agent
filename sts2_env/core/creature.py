@@ -79,6 +79,18 @@ class Creature:
         return self.current_hp <= 0
 
     @property
+    def is_secondary_enemy(self) -> bool:
+        """C# Creature.IsSecondaryEnemy: an enemy with an OwnerIsSecondaryEnemy power."""
+        if self.side != CombatSide.ENEMY:
+            return False
+        return any(getattr(power, "owner_is_secondary_enemy", False) for power in self.powers.values())
+
+    @property
+    def is_primary_enemy(self) -> bool:
+        """C# Creature.IsPrimaryEnemy: an enemy that is not secondary."""
+        return self.side == CombatSide.ENEMY and not self.is_secondary_enemy
+
+    @property
     def creature(self) -> Creature:
         """Compatibility shim for code paths that expect owner.creature."""
         return self

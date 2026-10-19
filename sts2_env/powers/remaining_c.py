@@ -121,9 +121,6 @@ class ReattachPower(PowerInstance):
         owner.escaped = False
         owner._death_processed = False
 
-    def should_stop_combat_ending(self) -> bool:
-        return self.is_reviving
-
     def should_allow_hitting(self, owner: Creature, combat: CombatState) -> bool:
         return not self.is_reviving
 
