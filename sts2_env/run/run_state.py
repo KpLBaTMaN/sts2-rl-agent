@@ -1425,6 +1425,8 @@ class RunState:
         self.act_floor: int = 0
         self.total_floor: int = 0
         self._rooms_generated = False
+        # Each act's boss encounter ID, picked when the act starts (the game shows it on the map).
+        self.act_boss_ids: dict[int, str | None] = {}
 
         # Event tracking
         self.visited_event_ids: set[str] = set()
@@ -1453,6 +1455,22 @@ class RunState:
     @property
     def current_act(self) -> ActConfig:
         return self.acts[self.current_act_index]
+
+    @property
+    def boss_encounter_id(self) -> str | None:
+        """The current act's boss (e.g. ``VANTOM_BOSS``), known from the act's start."""
+        return self.act_boss_ids.get(self.current_act_index)
+
+    def pick_act_boss(self) -> str | None:
+        """Fix the current act's boss once, from a stream of its own so no other draw moves."""
+        act = self.current_act_index
+        if act not in self.act_boss_ids:
+            from sts2_env.encounters import encounter_id, encounter_pools
+
+            bosses = encounter_pools(act)["boss"]
+            rng = Rng(self.rng.seed, f"act_{act + 1}_boss")
+            self.act_boss_ids[act] = encounter_id(rng.choice(bosses)) if bosses else None
+        return self.act_boss_ids[act]
 
     def add_player(self, player: PlayerState) -> PlayerState:
         if any(existing.player_id == player.player_id for existing in self.players):
@@ -1507,6 +1525,7 @@ class RunState:
             modifier.after_relic_grab_bags_populated(self)
         self._generate_rooms()
         self.generate_map()
+        self.pick_act_boss()
         self._fire_after_act_entered()
 
     def _generate_rooms(self) -> None:
@@ -1612,6 +1631,7 @@ class RunState:
         self.act_floor = 0
         self.unknown_odds.reset_to_base()
         self.generate_map()
+        self.pick_act_boss()
         self._fire_after_act_entered()
 
     def _fire_after_act_entered(self) -> None:

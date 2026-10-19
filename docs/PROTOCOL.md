@@ -113,13 +113,20 @@ Sent when the game is in the combat play phase and awaiting a card play or end-t
 | `hand[].target` | string | `"Self"`, `"None"`, `"AnyEnemy"`, `"AllEnemies"`, `"RandomEnemy"` |
 | `hand[].playable` | bool | Whether the card can be played right now |
 | `hand[].upgraded` | bool | (optional) Whether the card is upgraded |
+| `hand[].base_damage` / `base_block` | number | The card's own Damage / Block values (0 if it has none) |
+| `hand[].damage` / `block` | int | (in combat, if the card has them) Damage / Block as the card shows them: Strength, Weak, Dexterity, Frail... applied, no target |
+| `hand[].target_damage` | int[] | (hand cards with Damage) Shown damage against each entry of `enemies`, in order; 0 for dead enemies |
+| `hand[].keywords` | string[] | Card keywords: `"Exhaust"`, `"Ethereal"`, `"Innate"`, `"Unplayable"`, `"Retain"`, `"Sly"`, `"Eternal"` |
+| `hand[].retain_this_turn` / `sly_this_turn` | bool | Whether the card has Retain / Sly this turn, including one-turn grants |
+| `hand[].enchantment` | object | (optional) The card's enchantment: `{"id": "SHARP", "amount": 3}` |
+| `hand[].affliction` | string | (optional) The card's affliction ID, e.g. `"HEXED"` |
 | `enemies` | array | All enemy creatures (including dead ones) |
 | `enemies[].id` | string | Monster ID (e.g. `"JAW_WORM"`) |
 | `enemies[].hp` / `max_hp` | int | Current and max HP |
 | `enemies[].block` | int | Current block |
 | `enemies[].is_alive` | bool | Whether the enemy is alive |
 | `enemies[].intent` | string | Intent type (see Intent Types below) |
-| `enemies[].intent_damage` | int | (optional) Damage the attack will deal |
+| `enemies[].intent_damage` | int | (optional) Per-hit damage the attack shows (`AttackIntent.GetSingleDamage`: enemy Strength/Weak, player Vulnerable... applied) |
 | `enemies[].intent_hits` | int | (optional) Number of hits (for multi-attack) |
 | `enemies[].intent_move_id` | string | (optional) Internal move ID |
 | `enemies[].powers` | array | Active buffs/debuffs on the enemy |

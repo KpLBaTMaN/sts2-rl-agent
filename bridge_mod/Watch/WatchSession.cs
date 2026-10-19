@@ -52,7 +52,10 @@ public static class WatchSession
         var run = RunManager.Instance.DebugOnlyGetState();
         var player = run == null ? null : LocalContext.GetMe(run);
         if (run == null || player == null) return json;
-        payload["entity_schema"] = 1;
+        // 2: cards carry shown damage/block, hand cards their damage per enemy.
+        // 3: cards carry this-turn Retain/Sly, their enchantment and affliction;
+        //    run_state carries the act's boss, and next_map_coords where the player can go next.
+        payload["entity_schema"] = 3;
         payload["deck"] = JsonSerializer.SerializeToNode(player.Deck.Cards.Select(c => RlCombatHandler.SerializeCard(c, false)).ToList());
         payload["relics"] = JsonSerializer.SerializeToNode(player.Relics.Select(r => r.Id.Entry).ToList());
         payload["potions"] = JsonSerializer.SerializeToNode(RlCombatHandler.SerializePotions(player));
@@ -68,6 +71,8 @@ public static class WatchSession
             ["character"] = player.Character.Id.Entry,
             ["room"] = run.CurrentRoom?.RoomType.ToString() ?? "Map",
             ["in_combat"] = CombatManager.Instance.IsInProgress,
+            // Fixed when the act's rooms are generated; the map shows it from the start.
+            ["boss"] = run.Act.BossEncounter?.Id.Entry,
         };
         // Keep the last combat state available for reward/shop inputs, as in training.
         if (player.PlayerCombatState != null && run.CurrentRoom?.RoomType is RoomType.Monster or RoomType.Elite or RoomType.Boss)
@@ -76,6 +81,10 @@ public static class WatchSession
             payload["map_nodes"] = JsonSerializer.SerializeToNode(run.Map.GetAllMapPoints()
                 .Select(p => new { row = p.coord.row, col = p.coord.col, type = p.PointType.ToString(),
                     children = p.Children.Select(c => new { row = c.coord.row, col = c.coord.col }).ToArray() }));
+            // Where the player can go next, in every phase (the opening point's children before the first move).
+            MapPoint here = run.CurrentMapPoint ?? run.Map.StartingMapPoint;
+            payload["next_map_coords"] = JsonSerializer.SerializeToNode(here.Children
+                .Select(c => new { row = c.coord.row, col = c.coord.col }));
         }
         return payload.ToJsonString();
     }

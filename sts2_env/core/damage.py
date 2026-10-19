@@ -8,6 +8,7 @@ Hook.ModifyBlock (Hook.cs:960).
 from __future__ import annotations
 
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -110,6 +111,52 @@ def calculate_block(
                                                         card_source, card_play)
 
     return max(0, math.floor(block))
+
+
+# ─── Previews (numbers shown to the player; no side effects) ───────────────
+
+@contextmanager
+def _previewing_card(combat: CombatState, card: object | None):
+    # Powers read the card being played from the combat rather than a parameter.
+    previous = combat._active_card_source
+    combat._active_card_source = card
+    try:
+        yield
+    finally:
+        combat._active_card_source = previous
+
+
+def preview_card_damage(combat: CombatState, card: object, target: Creature | None = None) -> int:
+    """Damage the card shows, like DamageVar.UpdateCardPreview.
+
+    With no target this is the number printed on the card (Strength, Weak...);
+    with a target it also counts that creature's modifiers (Vulnerable...).
+    """
+    from sts2_env.core.hooks import modify_damage
+
+    if card.base_damage is None:
+        return 0
+    with _previewing_card(combat, card):
+        return modify_damage(card.base_damage, combat.player, target, ValueProp.MOVE, combat, card_source=card)
+
+
+def preview_card_block(combat: CombatState, card: object) -> int:
+    """Block the card shows, like BlockVar.UpdateCardPreview (Dexterity, Frail...)."""
+    from sts2_env.core.hooks import modify_block
+
+    if card.base_block is None:
+        return 0
+    with _previewing_card(combat, card):
+        return modify_block(card.base_block, combat.player, ValueProp.MOVE, combat,
+                            card_source=card, preview=True)
+
+
+def preview_intent_damage(combat: CombatState, enemy: Creature, damage: int) -> int:
+    """Per-hit damage an attack intent shows, like AttackIntent.GetSingleDamage."""
+    from sts2_env.core.hooks import modify_damage
+
+    with _previewing_card(combat, None):
+        return modify_damage(damage, enemy, combat.player, ValueProp.MOVE, combat)
 
 
 def apply_damage(

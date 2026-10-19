@@ -13,6 +13,9 @@ from sts2_env.core.enums import CardId
 from sts2_env.cards.factory import create_card
 from sts2_env.watch.adapter import WatchAdapter
 
+# Bridge payload version this adapter reads (bridge_mod/Watch/WatchSession.cs).
+ENTITY_SCHEMA = 3
+
 
 def enum_name(value):
     text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(value or ""))
@@ -36,18 +39,34 @@ def fill_card(card, out, *, hand=False):
     out[3] = card.get("base_block", reference.base_block or 0 if reference else 0) / 50
     out[4] = float(bool(card.get("upgraded")))
     out[5] = float(hand and bool(card.get("playable")))
+    out[8] = card.get("star_cost", reference.star_cost if reference else 0) / 5
+    # Shown numbers are only sent for cards in combat; elsewhere they equal the base ones.
+    out[9] = card.get("damage", out[2] * 50) / 50
+    out[10] = card.get("block", out[3] * 50) / 50
     if "keywords" in card:
         keywords = {enum_name(k) for k in card["keywords"]}
         out[6] = float("EXHAUST" in keywords)
-        out[7] = float(bool(keywords & {"ETHEREAL", "RETAIN"}))
-    out[8] = card.get("star_cost", reference.star_cost if reference else 0) / 5
+        out[7] = float("ETHEREAL" in keywords)
+        out[11] = float("RETAIN" in keywords or bool(card.get("retain_this_turn")))
+        out[12] = float("INNATE" in keywords)
+        out[13] = float("SLY" in keywords or bool(card.get("sly_this_turn")))
+        out[14] = float("UNPLAYABLE" in keywords or (card.get("cost", 0) < 0 and not card.get("cost_x")))
+        out[15] = float("ETERNAL" in keywords)
+    types, targets = E.CARD_TYPE_START, E.CARD_TYPE_START + len(E._CARD_TYPES)
     if "type" in card:
-        out[9:9 + len(E._CARD_TYPES)] = 0
-        E._one_hot(out, 9, E._CARD_TYPES, enum_value(E._CARD_TYPES, card["type"]))
+        out[types:targets] = 0
+        E._one_hot(out, types, E._CARD_TYPES, enum_value(E._CARD_TYPES, card["type"]))
     if "target" in card:
-        out[9 + len(E._CARD_TYPES):] = 0
+        out[targets:] = 0
         name = "ANY_ALLY" if enum_name(card["target"]) == "ANY_PLAYER" else card["target"]
-        E._one_hot(out, 9 + len(E._CARD_TYPES), E._TARGET_TYPES, enum_value(E._TARGET_TYPES, name))
+        E._one_hot(out, targets, E._TARGET_TYPES, enum_value(E._TARGET_TYPES, name))
+
+
+def fill_tags(card, ids, amounts):
+    """The bridge sends at most one enchantment ({id, amount}) and one affliction ID per card."""
+    enchantment = card.get("enchantment")
+    enchantments = {enchantment["id"]: enchantment.get("amount", 1)} if enchantment else {}
+    E._fill_card_tags(ids, amounts, enchantments, card.get("affliction"))
 
 
 def fill_powers(powers, ids, amounts):
@@ -57,25 +76,11 @@ def fill_powers(powers, ids, amounts):
         amounts[i] = np.clip(power.get("amount", 0) / 10, -10, 10)
 
 
-def path_summaries(nodes):
-    nodes = {(n["col"], n["row"]): n for n in nodes}
-    memo, visiting = {}, set()
-    def visit(coord):
-        if coord in memo:
-            return memo[coord]
-        if coord in visiting:
-            raise ValueError("Live map contains a cycle")
-        visiting.add(coord)
-        point = nodes[coord]
-        own = np.array([float(t == enum_value(E._PATH_TYPES, point["type"])) for t in E._PATH_TYPES])
-        children = [(p["col"], p["row"]) for p in point.get("children", []) if (p["col"], p["row"]) in nodes]
-        results = [visit(c) for c in children]
-        memo[coord] = (own + np.min([v[0] for v in results], axis=0), own + np.max([v[1] for v in results], axis=0)) if results else (own, own)
-        visiting.remove(coord)
-        return memo[coord]
-    for coord in nodes:
-        visit(coord)
-    return memo
+def map_routes(nodes):
+    """Route stats for the live map, computed by the training encoder's own code."""
+    graph = {(n["col"], n["row"]): (enum_value(E.MapPointType, n["type"]),
+                                    [(c["col"], c["row"]) for c in n.get("children", [])]) for n in nodes}
+    return E.route_stats(graph)
 
 
 class EntityWatchAdapter(WatchAdapter):
@@ -87,8 +92,8 @@ class EntityWatchAdapter(WatchAdapter):
 
     def encode(self, state, selected=()):
         """``selected`` holds card indexes already picked on a card_select screen."""
-        if state.get("entity_schema") != 1:
-            raise ValueError("SpireFormer needs the updated entity-enabled bridge mod (entity_schema=1)")
+        if state.get("entity_schema") != ENTITY_SCHEMA:
+            raise ValueError(f"SpireFormer needs the updated entity-enabled bridge mod (entity_schema={ENTITY_SCHEMA})")
         obs = E.empty_observation()
         run = state["run_state"]
         kind = state["type"]
@@ -110,6 +115,9 @@ class EntityWatchAdapter(WatchAdapter):
             for i, card in enumerate(combat.get("hand", [])[:E.MAX_HAND_SIZE]):
                 obs["hand_ids"][i], obs["hand_mask"][i] = E._card_index(card["id"]), True
                 fill_card(card, obs["hand_features"][i], hand=True)
+                fill_tags(card, obs["hand_tag_ids"][i], obs["hand_tag_amounts"][i])
+                for j, damage in enumerate(card.get("target_damage", [])[:E.MAX_ENEMIES]):
+                    obs["hand_target_damage"][i, j] = damage / 50
             for i, enemy in enumerate(combat.get("enemies", [])[:E.MAX_ENEMIES]):
                 obs["enemy_ids"][i], obs["enemy_mask"][i] = E.hash_bucket(enemy["id"]), True
                 f = obs["enemy_features"][i]
@@ -134,6 +142,7 @@ class EntityWatchAdapter(WatchAdapter):
                     break
                 obs["pile_ids"][slot], obs["pile_kinds"][slot], obs["pile_mask"][slot] = E._card_index(card["id"]), E._PILES[name], True
                 fill_card(card, obs["pile_features"][slot])
+                fill_tags(card, obs["pile_tag_ids"][slot], obs["pile_tag_amounts"][slot])
                 slot += 1
         E._fill_relics(obs, state["relics"])
         for i, potion in enumerate(state.get("potions", [])):
@@ -156,6 +165,7 @@ class EntityWatchAdapter(WatchAdapter):
                 obs["choice_ids"][i], obs["choice_mask"][i] = E._card_index(card["id"]), True
                 obs["choice_kinds"][i] = E._PILES.get(str(card.get("source_pile", "deck")).lower(), 0)
                 fill_card(card, obs["choice_features"][i])
+                fill_tags(card, obs["choice_tag_ids"][i], obs["choice_tag_amounts"][i])
                 obs["choice_features"][i][5] = float(i in selected)
         r = obs["run"]
         r[:12] = [run.get("act_index", 0) / 3, run.get("floor", 0) / 50, run.get("act_floor", 0) / 20,
@@ -165,16 +175,20 @@ class EntityWatchAdapter(WatchAdapter):
         E._one_hot(r, 12, E._ROOM_TYPES, enum_value(E._ROOM_TYPES, run.get("room")))
         r[12 + len(E._ROOM_TYPES) + phase] = 1
         r[-1] = float(kind == "card_select" and not in_combat)
+        if run.get("boss"):
+            obs["boss_id"][0] = E.hash_bucket(f"boss:{E.game_id(run['boss'])}")
+        # The bridge sends the map and the nodes reachable next in every phase.
+        routes = map_routes(state.get("map_nodes", []))
+        obs["route_ahead"][:] = E.route_features(routes, [(c["col"], c["row"]) for c in state.get("next_map_coords", [])])
         if kind not in {"combat_action", "card_select"}:
-            self.fill_options(obs, state)
+            self.fill_options(obs, state, routes)
         return obs
 
-    def fill_options(self, obs, state):
+    def fill_options(self, obs, state, routes):
         choices, automatic = self.choices(state)
         if automatic:
             return
         kind = state["type"]
-        paths = path_summaries(state.get("map_nodes", [])) if kind == "map_select" else {}
         options = state.get("nodes" if kind == "map_select" else "options", [])
         for i, (slot, (wire, _)) in enumerate(list(choices.items())[:E.MAX_OPTIONS]):
             index = wire.get("index", 0)
@@ -199,12 +213,7 @@ class EntityWatchAdapter(WatchAdapter):
             if opt_kind == "move":
                 name = "point:" + enum_name(option.get("type"))
                 f[6] = option.get("row", 0) / 20
-                coord = (option.get("col"), option.get("row"))
-                if coord in paths:
-                    low, high = paths[coord]
-                    base = 7 + len(E._RARITIES)
-                    f[base:base + len(E._PATH_TYPES)] = low / 10
-                    f[base + len(E._PATH_TYPES):] = high / 10
+                f[E.ROUTE_START:] = E.route_features(routes, [(option.get("col"), option.get("row"))])
             elif opt_kind == "rest_option":
                 name = "rest:" + enum_name(option.get("id"))
             elif opt_kind == "event_choice":

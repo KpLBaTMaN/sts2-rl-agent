@@ -4,7 +4,8 @@ Provides a step-based API for navigating through an entire run from
 start to finish, suitable for RL agents and scripted play-throughs.
 
 The run follows this lifecycle:
-  1. Initialize: starter deck, starter relic, first act map
+  1. Initialize: starter deck, starter relic, first act map (each act's boss
+     is fixed when the act starts, as the game shows it on the map)
   2. MAP_CHOICE: player selects the next map node
   3. Enter room -> phase depends on room type:
      - Monster/Elite/Boss -> COMBAT (agent plays through CombatState)
@@ -46,6 +47,7 @@ from sts2_env.potions.all import (
     FRUIT_JUICE_MAX_HP,
 )
 from sts2_env.potions.base import PotionInstance, create_potion, roll_random_potion_model
+from sts2_env.encounters import encounter_id, encounter_pools
 from sts2_env.encounters.events import get_event_encounter_setup
 from sts2_env.run.events import EventModel, EventOption, EventResult, get_event, pick_event
 from sts2_env.run.reward_objects import (
@@ -153,36 +155,6 @@ def _get_starter_deck(character_id: str) -> list[CardInstance]:
     # Fallback to Ironclad
     from sts2_env.cards.ironclad import create_ironclad_starter_deck
     return create_ironclad_starter_deck()
-
-
-# ---------------------------------------------------------------------------
-# Encounter pool accessor per act
-# ---------------------------------------------------------------------------
-
-def _get_encounter_pools(act_index: int) -> dict[str, list]:
-    """Return {weak, normal, elite, boss} encounter setup lists for an act."""
-    if act_index == 0:
-        from sts2_env.encounters.act1 import (
-            WEAK_ENCOUNTERS, NORMAL_ENCOUNTERS, ELITE_ENCOUNTERS, BOSS_ENCOUNTERS,
-        )
-    elif act_index == 1:
-        from sts2_env.encounters.act2 import (
-            WEAK_ENCOUNTERS, NORMAL_ENCOUNTERS, ELITE_ENCOUNTERS, BOSS_ENCOUNTERS,
-        )
-    elif act_index == 2:
-        from sts2_env.encounters.act3 import (
-            WEAK_ENCOUNTERS, NORMAL_ENCOUNTERS, ELITE_ENCOUNTERS, BOSS_ENCOUNTERS,
-        )
-    else:
-        from sts2_env.encounters.act4 import (
-            WEAK_ENCOUNTERS, NORMAL_ENCOUNTERS, ELITE_ENCOUNTERS, BOSS_ENCOUNTERS,
-        )
-    return {
-        "weak": list(WEAK_ENCOUNTERS),
-        "normal": list(NORMAL_ENCOUNTERS),
-        "elite": list(ELITE_ENCOUNTERS),
-        "boss": list(BOSS_ENCOUNTERS),
-    }
 
 
 _BOSS_RELIC_POOL = [
@@ -561,9 +533,11 @@ class RunManager:
         self._selected_combat_player_id = player.player_id
 
         # Select encounter from appropriate pool
-        pools = _get_encounter_pools(self._run_state.current_act_index)
+        pools = encounter_pools(self._run_state.current_act_index)
         if room_type == RoomType.BOSS:
-            pool = pools["boss"]
+            # The act's boss was fixed when the act started.
+            boss_id = self._run_state.pick_act_boss()
+            pool = [setup for setup in pools["boss"] if encounter_id(setup) == boss_id]
         elif room_type == RoomType.ELITE:
             pool = pools["elite"]
         elif self._run_state.act_floor <= self._run_state.current_act.num_weak_encounters:
@@ -572,7 +546,7 @@ class RunManager:
             pool = pools["normal"]
 
         if pool:
-            setup_fn = self._rng.choice(pool)
+            setup_fn = pool[0] if room_type == RoomType.BOSS else self._rng.choice(pool)
             encounter_rng = Rng(self._rng.next_int(0, INT_MAX))
             setup_fn(self._combat, encounter_rng)
 

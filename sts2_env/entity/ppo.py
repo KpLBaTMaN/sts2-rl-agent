@@ -28,7 +28,7 @@ GAE_LAMBDA = 0.95
 CLIP_RANGE = 0.2
 VALUE_COEF = 0.5
 MAX_GRAD_NORM = 0.5
-MODEL_FORMAT = "spireformer-v2"
+MODEL_FORMAT = "spireformer-v3"
 
 
 def stack_observations(observations: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:

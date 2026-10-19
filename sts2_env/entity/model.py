@@ -34,6 +34,7 @@ from sts2_env.entity.observation import (
     MAX_CHOICES,
     OPTION_FEATURES,
     POTION_FEATURES,
+    ROUTE_FEATURES,
     RUN_FEATURES,
     VOCAB_SIZES,
 )
@@ -72,12 +73,20 @@ class SpireFormer(nn.Module):
 
         self.global_details = nn.Linear(GLOBAL_FEATURES, d)
         self.run_details = nn.Linear(RUN_FEATURES, d)
+        self.boss_embedding = nn.Embedding(VOCAB_SIZES["boss"], d, padding_idx=0)
+        self.route_details = nn.Linear(ROUTE_FEATURES, d)
         self.option_details = nn.Linear(OPTION_FEATURES, d)
         self.card_details = nn.Linear(CARD_FEATURES, d)
         self.enemy_details = nn.Linear(ENEMY_FEATURES, d)
         self.potion_details = nn.Linear(POTION_FEATURES, d)
-        self.power_amount = nn.Linear(1, d)
+        # Each power scales its own amount vector, so summed powers keep their
+        # separate stack sizes (one shared vector would only keep the total).
+        self.power_amount = nn.Embedding(VOCAB_SIZES["power"], d, padding_idx=0)
         self.power_norm = nn.LayerNorm(d)
+        self.target_damage = nn.Linear(1, d)
+        # Card enchantments/afflictions: a vector per name plus its own amount vector, like powers.
+        self.card_tag_embedding = nn.Embedding(VOCAB_SIZES["card_tag"], d, padding_idx=0)
+        self.card_tag_amount = nn.Embedding(VOCAB_SIZES["card_tag"], d, padding_idx=0)
 
         layer = nn.TransformerEncoderLayer(
             d, config.heads, dim_feedforward=4 * d, dropout=config.dropout,
@@ -97,9 +106,15 @@ class SpireFormer(nn.Module):
 
     def _pooled_powers(self, ids: torch.Tensor, amounts: torch.Tensor) -> torch.Tensor:
         """Sum each creature's buffs/debuffs into one vector (ID + stack size)."""
-        tokens = self.power_embedding(ids) + self.power_amount(amounts.unsqueeze(-1))
+        tokens = self.power_embedding(ids) + amounts.unsqueeze(-1) * self.power_amount(ids)
         tokens = tokens * (ids > 0).unsqueeze(-1)
         return self.power_norm(tokens.sum(dim=-2))
+
+    def _card_tags(self, obs: dict[str, torch.Tensor], prefix: str) -> torch.Tensor:
+        """Sum each card's enchantments and affliction (empty slots embed to zero)."""
+        ids, amounts = obs[prefix + "_tag_ids"], obs[prefix + "_tag_amounts"]
+        tokens = self.card_tag_embedding(ids) + amounts.unsqueeze(-1) * self.card_tag_amount(ids)
+        return tokens.sum(dim=-2)
 
     def _typed(self, tokens: torch.Tensor, kind: int) -> torch.Tensor:
         return tokens + self.token_type_embedding.weight[kind]
@@ -110,16 +125,18 @@ class SpireFormer(nn.Module):
         device = obs["global"].device
 
         global_token = (self.global_details(obs["global"]) + self.run_details(obs["run"])
+                        + self.boss_embedding(obs["boss_id"][:, 0]) + self.route_details(obs["route_ahead"])
                         + self._pooled_powers(obs["player_power_ids"], obs["player_power_amounts"]))
-        hand = self.card_embedding(obs["hand_ids"]) + self.card_details(obs["hand_features"])
+        hand = (self.card_embedding(obs["hand_ids"]) + self.card_details(obs["hand_features"])
+                + self._card_tags(obs, "hand"))
         pile = (self.card_embedding(obs["pile_ids"]) + self.card_details(obs["pile_features"])
-                + self.pile_embedding(obs["pile_kinds"]))
+                + self.pile_embedding(obs["pile_kinds"]) + self._card_tags(obs, "pile"))
         enemies = (self.monster_embedding(obs["enemy_ids"]) + self.enemy_details(obs["enemy_features"])
                    + self._pooled_powers(obs["enemy_power_ids"], obs["enemy_power_amounts"]))
         potions = self.potion_embedding(obs["potion_ids"]) + self.potion_details(obs["potion_features"])
         relics = self.relic_embedding(obs["relic_ids"])
         choices = (self.card_embedding(obs["choice_ids"]) + self.card_details(obs["choice_features"])
-                   + self.pile_embedding(obs["choice_kinds"]))
+                   + self.pile_embedding(obs["choice_kinds"]) + self._card_tags(obs, "choice"))
         options = (self.option_kind_embedding(obs["option_kinds"]) + self.card_embedding(obs["option_cards"])
                    + self.relic_embedding(obs["option_relics"]) + self.potion_embedding(obs["option_potions"])
                    + self.name_embedding(obs["option_names"]) + self.option_details(obs["option_features"]))
@@ -151,7 +168,7 @@ class SpireFormer(nn.Module):
         cards = self.card_head(torch.cat([hand_out, g_hand], -1)).squeeze(-1)
         card_pairs = torch.cat([
             hand_out.unsqueeze(2).expand(-1, -1, MAX_ENEMIES, -1),
-            enemy_out.unsqueeze(1).expand(-1, MAX_HAND_SIZE, -1, -1),
+            enemy_out.unsqueeze(1) + self.target_damage(obs["hand_target_damage"].unsqueeze(-1)),
             g_pair,
         ], -1)
         card_targets = self.card_target_head(card_pairs).squeeze(-1).reshape(batch, -1)

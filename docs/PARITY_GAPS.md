@@ -263,6 +263,17 @@ The previously ambiguous no-op / quest hook items are now covered:
 
 This closes the old no-op ambiguity category, but it does not by itself prove full exact parity across the broader unaudited surfaces above.
 
+### 5. Encounter generation order
+
+The game builds every act's rooms at run start from `Rng.UpFront`
+(`ActModel.GenerateRooms`): the event order, weak/normal/elite encounter lists,
+the boss and the ancient. The simulator shuffles events from `up_front` but
+picks weak, normal and elite fights when each room is entered. Each act's boss
+is fixed when the act starts (`RunState.pick_act_boss`), from a stream of its
+own (`act_N_boss`), so it is known from the act's start as in the game and no
+other draw moves. The same seed still gives a different boss than the game.
+The A10 second boss is not simulated.
+
 ## Standard for Claiming Exact Parity
 
 We should not describe `sts2_env` as an exact match until all of the following are true:

@@ -339,6 +339,7 @@ def modify_block(
     combat: CombatState,
     card_source: object | None = None,
     card_play: object | None = None,
+    preview: bool = False,
 ) -> int:
     """Full block pipeline matching Hook.ModifyBlock (Hook.cs:960).
 
@@ -346,6 +347,9 @@ def modify_block(
     2. Additive pass (Dexterity)
     3. Multiplicative pass (Frail=0.75x)
     4. Floor and clamp to 0
+
+    ``preview`` skips the after-modifying hooks, like the game's card preview
+    (BlockVar.UpdateCardPreview), so it changes nothing.
     """
     block = float(base_block)
     modifier_ids: set[int] = set()
@@ -379,7 +383,7 @@ def modify_block(
     block *= _multiplayer_enemy_block_multiplier(target, props, combat)
 
     modified_block = max(0, math.floor(block))
-    if modifier_ids:
+    if modifier_ids and not preview:
         for owner, power in _iter_power_listeners(combat):
             if id(power) in modifier_ids:
                 power.after_modifying_block_amount(owner, modified_block, card_source, card_play, combat)

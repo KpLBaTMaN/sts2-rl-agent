@@ -11,7 +11,7 @@ from sts2_env.entity.model import SpireFormer, SpireFormerConfig
 from sts2_env.entity.ppo import EntityAgent
 from sts2_env.gym_env.run_env import STS2RunEnv
 from sts2_env.watch import player
-from sts2_env.watch.entity_adapter import EntityWatchAdapter
+from sts2_env.watch.entity_adapter import ENTITY_SCHEMA, EntityWatchAdapter
 from tests.test_watch_entity import card
 
 # Scripted policies replace the network; only the action count is read from the model.
@@ -20,7 +20,7 @@ CHOICE_KEYS = ("pending_choice", "choice_ids", "choice_kinds", "choice_features"
 
 
 def live_select(cards, min_select, max_select):
-    return dict(type="card_select", entity_schema=1, cards=cards, min_select=min_select, max_select=max_select,
+    return dict(type="card_select", entity_schema=ENTITY_SCHEMA, cards=cards, min_select=min_select, max_select=max_select,
                 deck=cards, relics=[], potions=[],
                 run_state=dict(act_index=0, floor=3, act_floor=3, hp=60, max_hp=80, gold=99, deck_size=len(cards),
                                relic_count=0, potion_count=0, max_potion_slots=3, ascension=0,

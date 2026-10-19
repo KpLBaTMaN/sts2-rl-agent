@@ -59,10 +59,12 @@ string overrides it. Integer seed 42 is passed to the game as string `"42"`;
 both implementations hash that text to seed their named RNG streams.
 
 Watch mode uses CPU inference, leaving the GPU available for training. It accepts
-flat 151-input / 157-action policies and SpireFormer v2 `.pt` Act 1/full-run
+flat 151-input / 157-action policies and SpireFormer v3 `.pt` Act 1/full-run
 checkpoints with 157 actions. SpireFormer requires the entity-enabled bridge
-(`entity_schema: 1`); an older bridge is rejected rather than silently filling
-missing inputs. The old
+(`entity_schema: 3`, which adds the damage/block cards show, each hand
+card's damage per enemy, each card's enchantment, affliction and this-turn
+Retain/Sly, the act's boss and the map nodes reachable next); an older bridge is rejected rather than silently
+filling missing inputs. The old
 131-input combat model and Play-AI.cmd remain separate.
 
 SpireFormer live transfer remains experimental. Map/deck and starter combat

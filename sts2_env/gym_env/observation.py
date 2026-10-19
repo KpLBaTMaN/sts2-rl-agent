@@ -16,6 +16,7 @@ from __future__ import annotations
 import numpy as np
 
 from sts2_env.core.combat import CombatState
+from sts2_env.core.damage import preview_intent_damage
 from sts2_env.core.enums import CardId, IntentType, PowerId
 from sts2_env.core.constants import MAX_HAND_SIZE, MAX_ENEMIES
 
@@ -115,7 +116,9 @@ def encode_observation(combat: CombatState) -> np.ndarray:
                     for j, it in enumerate(INTENT_TYPES):
                         if intent.intent_type == it:
                             obs[idx + 3 + j] = 1.0
-                    obs[idx + 3 + NUM_INTENT_TYPES] = intent.damage / 30.0
+                    # Shown per-hit damage, matching the bridge's intent_damage.
+                    damage = preview_intent_damage(combat, enemy, intent.damage) if intent.is_attack else intent.damage
+                    obs[idx + 3 + NUM_INTENT_TYPES] = damage / 30.0
                     obs[idx + 3 + NUM_INTENT_TYPES + 1] = intent.hits / 5.0
 
             # Enemy powers

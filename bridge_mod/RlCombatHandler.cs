@@ -29,6 +29,8 @@ using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.GameActions;
 using MegaCrit.Sts2.Core.GameActions.Multiplayer;
+using MegaCrit.Sts2.Core.Hooks;
+using MegaCrit.Sts2.Core.Localization.DynamicVars;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.MonsterMoves.Intents;
 using MegaCrit.Sts2.Core.Random;
@@ -469,7 +471,10 @@ public class RlCombatHandler : IRoomHandler, IHandler
             {
                 foreach (CardModel card in pcs.Hand.Cards)
                 {
-                    handCards.Add(SerializeCard(card));
+                    var cardData = SerializeCard(card);
+                    if (combatState != null)
+                        cardData["target_damage"] = PreviewTargetDamage(card, combatState);
+                    handCards.Add(cardData);
                 }
             }
 
@@ -540,17 +545,51 @@ public class RlCombatHandler : IRoomHandler, IHandler
             ["cost_x"] = card.EnergyCost.CostsX,
             ["star_cost"] = Math.Max(0, card.CurrentStarCost),
             ["keywords"] = card.Keywords.Select(k => k.ToString()).ToArray(),
+            // Retain/Sly can also be granted for this turn only.
+            ["retain_this_turn"] = card.ShouldRetainThisTurn,
+            ["sly_this_turn"] = card.IsSlyThisTurn,
             ["rarity"] = card.Rarity.ToString(),
             ["source_pile"] = card.Pile?.Type.ToString() ?? "None",
         };
         result["base_damage"] = card.DynamicVars.TryGetValue("Damage", out var damage) ? damage.BaseValue : 0;
         result["base_block"] = card.DynamicVars.TryGetValue("Block", out var block) ? block.BaseValue : 0;
 
+        // In combat, also the numbers the card shows (Strength, Weak, Dexterity, Frail...).
+        if (card.CombatState != null)
+        {
+            if (damage is DamageVar damageVar)
+                result["damage"] = PreviewDamage(card, damageVar, null);
+            if (block is BlockVar blockVar)
+                result["block"] = (int)Math.Max(0m, Hook.ModifyBlock(card.CombatState, card.Owner.Creature,
+                    blockVar.BaseValue, blockVar.Props, card, null, out _));
+        }
+
         if (card.IsUpgraded)
             result["upgraded"] = true;
 
+        // A card has at most one enchantment and one affliction.
+        if (card.Enchantment != null)
+            result["enchantment"] = new Dictionary<string, object>
+            {
+                ["id"] = card.Enchantment.Id.Entry,
+                ["amount"] = card.Enchantment.Amount,
+            };
+        if (card.Affliction != null)
+            result["affliction"] = card.Affliction.Id.Entry;
+
         return result;
     }
+
+    // Same call as DamageVar.UpdateCardPreview, without touching the card's displayed value.
+    private static int PreviewDamage(CardModel card, DamageVar damageVar, Creature? target) =>
+        (int)Math.Max(0m, Hook.ModifyDamage(card.Owner.RunState, card.CombatState, target, card.Owner.Creature,
+            damageVar.BaseValue, damageVar.Props, card, ModifyDamageHookType.All, CardPreviewMode.None, out _));
+
+    // Damage a hand card would deal to each enemy (0 for dead enemies), in enemy order.
+    private static List<int> PreviewTargetDamage(CardModel card, CombatState combatState) =>
+        card.DynamicVars.TryGetValue("Damage", out var damage) && damage is DamageVar damageVar
+            ? combatState.Enemies.Select(enemy => enemy.IsAlive ? PreviewDamage(card, damageVar, enemy) : 0).ToList()
+            : new List<int>();
 
     private Dictionary<string, object> SerializeEnemy(Creature enemy)
     {

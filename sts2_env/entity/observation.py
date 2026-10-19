@@ -20,7 +20,10 @@ action index it stands for, and the policy scores it there.
 
 from __future__ import annotations
 
+import re
+import warnings
 import zlib
+from typing import NamedTuple
 
 import gymnasium
 import numpy as np
@@ -30,6 +33,7 @@ from sts2_env.cards.base import CardInstance
 from sts2_env.core.combat import CombatState
 from sts2_env.core.constants import MAX_ENEMIES, MAX_HAND_SIZE, MAX_POTION_SLOTS
 from sts2_env.core.creature import Creature
+from sts2_env.core.damage import preview_card_block, preview_card_damage, preview_intent_damage
 from sts2_env.core.enums import (
     CardId,
     CardRarity,
@@ -44,15 +48,17 @@ from sts2_env.core.enums import (
     TargetType,
 )
 from sts2_env.gym_env.run_env import _LAYOUT, _PHASE_INDEX, STS2RunEnv
-from sts2_env.map.map_point import MapCoord
 from sts2_env.relics.base import RelicId
 from sts2_env.run.run_manager import RunManager
 
 MAX_PILE_CARDS = 60
 MAX_POWERS = 12
-MAX_RELICS = 24
+# Well past what a run collects; _fill_relics warns if a run ever goes over.
+MAX_RELICS = 48
 MAX_CHOICES = 40
 MAX_OPTIONS = 16
+# Enchantments and afflictions per card (the game allows one of each).
+MAX_CARD_TAGS = 3
 HASH_BUCKETS = 1024
 
 _CARD_INDEX = {cid: i + 1 for i, cid in enumerate(CardId)}
@@ -70,6 +76,20 @@ _PILES = {"draw": 1, "discard": 2, "exhaust": 3, "hand": 4, "deck": 5}
 # What a map node's onward paths contain; counts summarise every path to the boss.
 _PATH_TYPES = [MapPointType.MONSTER, MapPointType.ELITE, MapPointType.REST_SITE,
                MapPointType.SHOP, MapPointType.TREASURE, MapPointType.UNKNOWN]
+_MONSTERS, _ELITES, _RESTS, _SHOPS = range(4)
+# Real routes kept per node, so counts that go together stay together: fewest
+# elites, most elites, most rest sites, most shops.  The whole count vector is
+# the last tie-break, so any order of a node's children gives the same route.
+_ROUTE_KEYS = [
+    lambda v: (-v[_ELITES], v[_RESTS], -v[_MONSTERS], *v),
+    lambda v: (v[_ELITES], v[_RESTS], *v),
+    lambda v: (v[_RESTS], -v[_ELITES], *v),
+    lambda v: (v[_SHOPS], -v[_ELITES], *v),
+]
+# Floors until the nearest of these on any route.
+_DISTANCE_TYPES = [MapPointType.ELITE, MapPointType.REST_SITE, MapPointType.SHOP, MapPointType.TREASURE]
+# Fewest and most of each type, the kept routes' counts, then nearness of each distance type.
+ROUTE_FEATURES = (2 + len(_ROUTE_KEYS)) * len(_PATH_TYPES) + len(_DISTANCE_TYPES)
 
 OPTION_KINDS = [
     "move", "pick_card", "skip_card", "reroll", "pick_potion", "skip_potion",
@@ -86,29 +106,45 @@ VOCAB_SIZES = {
     "monster": HASH_BUCKETS,
     "potion": HASH_BUCKETS,
     "name": HASH_BUCKETS,
+    "card_tag": HASH_BUCKETS,
+    "boss": HASH_BUCKETS,
     "pile": len(_PILES) + 1,
     "option_kind": len(OPTION_KINDS) + 1,
 }
 
-CARD_FEATURES = 9 + len(_CARD_TYPES) + len(_TARGET_TYPES)
+# Card details: 16 numbers, then card-type and target-type one-hots.
+CARD_TYPE_START = 16
+CARD_FEATURES = CARD_TYPE_START + len(_CARD_TYPES) + len(_TARGET_TYPES)
 GLOBAL_FEATURES = 16
 RUN_FEATURES = 12 + len(_ROOM_TYPES) + len(_PHASE_INDEX) + 1
 ENEMY_FEATURES = 9 + len(_INTENT_TYPES)
 POTION_FEATURES = 1 + len(_POTION_TARGETS)
-OPTION_FEATURES = 7 + len(_RARITIES) + 2 * len(_PATH_TYPES)
+# Option details: 7 numbers, rarity one-hot, then a map node's route summary.
+ROUTE_START = 7 + len(_RARITIES)
+OPTION_FEATURES = ROUTE_START + ROUTE_FEATURES
 
 # name -> (shape, dtype); masks are bool, IDs int64, features float32.
 OBS_SPEC: dict[str, tuple[tuple[int, ...], type]] = {
     "global": ((GLOBAL_FEATURES,), np.float32),
     "run": ((RUN_FEATURES,), np.float32),
+    # The act's boss, and the routes on from where the player is now (every phase).
+    "boss_id": ((1,), np.int64),
+    "route_ahead": ((ROUTE_FEATURES,), np.float32),
     "player_power_ids": ((MAX_POWERS,), np.int64),
     "player_power_amounts": ((MAX_POWERS,), np.float32),
     "hand_ids": ((MAX_HAND_SIZE,), np.int64),
     "hand_features": ((MAX_HAND_SIZE, CARD_FEATURES), np.float32),
     "hand_mask": ((MAX_HAND_SIZE,), np.bool_),
+    # Damage each hand card would deal to each enemy, as the game previews it.
+    "hand_target_damage": ((MAX_HAND_SIZE, MAX_ENEMIES), np.float32),
+    # Each card's enchantments and affliction: hashed names and their amounts.
+    "hand_tag_ids": ((MAX_HAND_SIZE, MAX_CARD_TAGS), np.int64),
+    "hand_tag_amounts": ((MAX_HAND_SIZE, MAX_CARD_TAGS), np.float32),
     "pile_ids": ((MAX_PILE_CARDS,), np.int64),
     "pile_kinds": ((MAX_PILE_CARDS,), np.int64),
     "pile_features": ((MAX_PILE_CARDS, CARD_FEATURES), np.float32),
+    "pile_tag_ids": ((MAX_PILE_CARDS, MAX_CARD_TAGS), np.int64),
+    "pile_tag_amounts": ((MAX_PILE_CARDS, MAX_CARD_TAGS), np.float32),
     "pile_mask": ((MAX_PILE_CARDS,), np.bool_),
     "enemy_ids": ((MAX_ENEMIES,), np.int64),
     "enemy_features": ((MAX_ENEMIES, ENEMY_FEATURES), np.float32),
@@ -123,6 +159,8 @@ OBS_SPEC: dict[str, tuple[tuple[int, ...], type]] = {
     "choice_ids": ((MAX_CHOICES,), np.int64),
     "choice_kinds": ((MAX_CHOICES,), np.int64),
     "choice_features": ((MAX_CHOICES, CARD_FEATURES), np.float32),
+    "choice_tag_ids": ((MAX_CHOICES, MAX_CARD_TAGS), np.int64),
+    "choice_tag_amounts": ((MAX_CHOICES, MAX_CARD_TAGS), np.float32),
     "choice_mask": ((MAX_CHOICES,), np.bool_),
     "pending_choice": ((1,), np.bool_),
     "option_slots": ((MAX_OPTIONS,), np.int64),
@@ -184,10 +222,41 @@ def _card_features(combat: CombatState | None, card: CardInstance, out: np.ndarr
     out[4] = float(card.upgraded)
     out[5] = float(in_hand and combat is not None and combat.can_play_card(card))
     out[6] = float(card.exhausts)
-    out[7] = float(card.is_ethereal or card.is_retain)
+    out[7] = float(card.is_ethereal)
     out[8] = card.star_cost / 5.0
-    _one_hot(out, 9, _CARD_TYPES, card.card_type)
-    _one_hot(out, 9 + len(_CARD_TYPES), _TARGET_TYPES, card.target_type)
+    # Damage and block as the card shows them now (Strength, Weak, Dexterity, Frail...).
+    if combat is not None:
+        out[9] = preview_card_damage(combat, card) / 50.0
+        out[10] = preview_card_block(combat, card) / 50.0
+    else:
+        out[9], out[10] = out[2], out[3]
+    # Retain and Sly include their this-turn-only versions.
+    out[11] = float(card.is_retain or card.single_turn_retain)
+    out[12] = float(card.is_innate)
+    out[13] = float(card.is_sly)
+    out[14] = float(card.is_unplayable)
+    out[15] = float(not card.is_removable)  # Eternal
+    _one_hot(out, CARD_TYPE_START, _CARD_TYPES, card.card_type)
+    _one_hot(out, CARD_TYPE_START + len(_CARD_TYPES), _TARGET_TYPES, card.target_type)
+
+
+def game_id(name: str) -> str:
+    """The game's ID spelling (RoyallyApproved -> ROYALLY_APPROVED) so simulator and bridge names match."""
+    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name).replace(" ", "_").upper()
+
+
+def _fill_card_tags(ids: np.ndarray, amounts: np.ndarray, enchantments: dict, affliction: str | None) -> None:
+    """A card's enchantments (with amounts) and affliction, as hashed names."""
+    tags = [(f"enchantment:{game_id(name)}", amount) for name, amount in enchantments.items()]
+    if affliction:
+        tags.append((f"affliction:{game_id(affliction)}", 0))  # no affliction uses its amount
+    for i, (name, amount) in enumerate(tags[:MAX_CARD_TAGS]):
+        ids[i] = hash_bucket(name)
+        amounts[i] = np.clip(amount / 10.0, -10.0, 10.0)
+
+
+def _card_tags(card: CardInstance, ids: np.ndarray, amounts: np.ndarray) -> None:
+    _fill_card_tags(ids, amounts, card.enchantments, card.affliction)
 
 
 def _powers(creature: Creature, ids: np.ndarray, amounts: np.ndarray) -> None:
@@ -209,6 +278,7 @@ def _fill_choice(obs: dict[str, np.ndarray], pending, combat: CombatState | None
         obs["choice_ids"][i] = _card_index(option.card.card_id)
         obs["choice_kinds"][i] = _PILES.get(option.source_pile, 0)
         _card_features(combat, option.card, obs["choice_features"][i], in_hand=False)
+        _card_tags(option.card, obs["choice_tag_ids"][i], obs["choice_tag_amounts"][i])
         # Reuse the "playable" slot to show which options are already selected.
         obs["choice_features"][i][5] = float(i in pending.selected_indices)
         obs["choice_mask"][i] = True
@@ -236,7 +306,12 @@ def encode_entities(combat: CombatState) -> dict[str, np.ndarray]:
     for i, card in enumerate(combat.hand[:MAX_HAND_SIZE]):
         obs["hand_ids"][i] = _card_index(card.card_id)
         _card_features(combat, card, obs["hand_features"][i], in_hand=True)
+        _card_tags(card, obs["hand_tag_ids"][i], obs["hand_tag_amounts"][i])
         obs["hand_mask"][i] = True
+        if card.base_damage is not None:
+            for j, enemy in enumerate(combat.enemies[:MAX_ENEMIES]):
+                if enemy.is_alive:
+                    obs["hand_target_damage"][i, j] = preview_card_damage(combat, card, enemy) / 50.0
 
     _fill_piles(obs, combat, (("draw", combat.draw_pile), ("discard", combat.discard_pile),
                               ("exhaust", combat.exhaust_pile)))
@@ -256,9 +331,11 @@ def encode_entities(combat: CombatState) -> dict[str, np.ndarray]:
             intents = ai.current_move.intents
             attacks = [it for it in intents if it.is_attack]
             if attacks:
-                f[5] = attacks[0].damage / 30.0
-                f[6] = attacks[0].hits / 5.0
-                f[7] = sum(it.total_damage for it in attacks) / 60.0
+                # Per-hit damage as the game shows it (enemy Strength/Weak, our Vulnerable...).
+                hits = [(preview_intent_damage(combat, enemy, it.damage), it.hits) for it in attacks]
+                f[5] = hits[0][0] / 30.0
+                f[6] = hits[0][1] / 5.0
+                f[7] = sum(damage * count for damage, count in hits) / 60.0
             f[8] = len(intents) / 3.0
             for intent in intents:
                 _one_hot(f, 9, _INTENT_TYPES, intent.intent_type)
@@ -281,6 +358,7 @@ def _fill_piles(obs, combat, piles) -> None:
             obs["pile_ids"][slot] = _card_index(card.card_id)
             obs["pile_kinds"][slot] = _PILES[kind]
             _card_features(combat, card, obs["pile_features"][slot], in_hand=False)
+            _card_tags(card, obs["pile_tag_ids"][slot], obs["pile_tag_amounts"][slot])
             obs["pile_mask"][slot] = True
             slot += 1
 
@@ -296,7 +374,11 @@ def _fill_potions(obs, potions) -> None:
 
 
 def _fill_relics(obs, relic_ids) -> None:
-    for i, relic_id in enumerate(list(relic_ids)[:MAX_RELICS]):
+    relic_ids = list(relic_ids)
+    if len(relic_ids) > MAX_RELICS:
+        warnings.warn(f"Only the first {MAX_RELICS} relics are encoded; raise MAX_RELICS",
+                      RuntimeWarning, stacklevel=2)
+    for i, relic_id in enumerate(relic_ids[:MAX_RELICS]):
         obs["relic_ids"][i] = _relic_index(relic_id)
         obs["relic_mask"][i] = True
 
@@ -305,27 +387,90 @@ def _fill_relics(obs, relic_ids) -> None:
 # Whole-run observations
 # ---------------------------------------------------------------------------
 
-def _path_summaries(act_map) -> dict:
-    """coord -> (min counts, max counts) of each path type from that node to the boss."""
+class RouteStats(NamedTuple):
+    low: np.ndarray        # fewest of each path type on any route
+    high: np.ndarray       # most of each path type on any route
+    profiles: np.ndarray   # one real route per _ROUTE_KEYS entry, all its counts together
+    distance: np.ndarray   # floors to the nearest _DISTANCE_TYPES node (0 = this node, inf = none)
+
+
+def _combine_routes(stats: list[RouteStats]) -> RouteStats:
+    """Routes that may start from any of several nodes."""
+    return RouteStats(
+        np.min([s.low for s in stats], axis=0),
+        np.max([s.high for s in stats], axis=0),
+        np.array([max((s.profiles[k] for s in stats), key=key) for k, key in enumerate(_ROUTE_KEYS)]),
+        np.min([s.distance for s in stats], axis=0),
+    )
+
+
+def route_stats(graph: dict) -> dict:
+    """coord -> RouteStats over every route from that node to the boss.
+
+    ``graph`` maps coord -> (point type, child coords); the simulator's map and
+    the bridge's map_nodes both go through here so they encode the same.
+    """
     memo: dict = {}
+    visiting: set = set()
 
-    def visit(point):
-        key = point.coord
-        if key in memo:
-            return memo[key]
-        own = np.array([float(point.point_type == t) for t in _PATH_TYPES], dtype=np.float32)
-        children = [child for child in point.children if child is not None]
-        if not children:
-            memo[key] = (own, own)
+    def visit(coord) -> RouteStats:
+        if coord in memo:
+            return memo[coord]
+        if coord in visiting:
+            raise ValueError("Map contains a cycle")
+        visiting.add(coord)
+        point_type, children = graph[coord]
+        own = np.array([float(point_type == t) for t in _PATH_TYPES])
+        here = np.array([0.0 if point_type == t else np.inf for t in _DISTANCE_TYPES])
+        results = [visit(child) for child in children if child in graph]
+        if results:
+            # Adding this node's counts keeps each criterion's best child best.
+            ahead = _combine_routes(results)
+            memo[coord] = RouteStats(own + ahead.low, own + ahead.high, own + ahead.profiles,
+                                     np.minimum(here, ahead.distance + 1))
         else:
-            results = [visit(child) for child in children]
-            memo[key] = (own + np.min([r[0] for r in results], axis=0),
-                         own + np.max([r[1] for r in results], axis=0))
-        return memo[key]
+            memo[coord] = RouteStats(own, own, np.tile(own, (len(_ROUTE_KEYS), 1)), here)
+        visiting.remove(coord)
+        return memo[coord]
 
-    for point in act_map.all_points():
-        visit(point)
+    for coord in graph:
+        visit(coord)
     return memo
+
+
+def route_features(stats: dict, coords) -> np.ndarray:
+    """Routes onward from any of ``coords`` (all zeros when none are on the map)."""
+    out = np.zeros(ROUTE_FEATURES, np.float32)
+    found = [stats[c] for c in coords if c in stats]
+    if found:
+        s = _combine_routes(found)
+        n, profiles = len(_PATH_TYPES), len(_ROUTE_KEYS) * len(_PATH_TYPES)
+        out[:n] = s.low / 10.0
+        out[n:2 * n] = s.high / 10.0
+        out[2 * n:2 * n + profiles] = s.profiles.ravel() / 10.0
+        out[2 * n + profiles:] = 1.0 / (1.0 + s.distance)  # 1 = this floor, 0 = none ahead
+    return out
+
+
+def _map_graph(act_map) -> dict:
+    return {(p.coord.col, p.coord.row): (p.point_type, [(c.coord.col, c.coord.row) for c in p.children if c is not None])
+            for p in act_map.all_points()}
+
+
+_ROUTE_CACHE: dict = {}
+
+
+def _cached_routes(act_map) -> dict:
+    """Route stats for a map, recomputed only when the map changes (they are read every step)."""
+    if act_map is None:
+        return {}
+    graph = _map_graph(act_map)
+    key = tuple((coord, point_type, tuple(children)) for coord, (point_type, children) in graph.items())
+    if key not in _ROUTE_CACHE:
+        if len(_ROUTE_CACHE) >= 32:  # several envs share this process
+            _ROUTE_CACHE.pop(next(iter(_ROUTE_CACHE)))
+        _ROUTE_CACHE[key] = route_stats(graph)
+    return _ROUTE_CACHE[key]
 
 
 def run_options(env: STS2RunEnv, mask: np.ndarray) -> list[tuple[int, str, dict]]:
@@ -382,10 +527,9 @@ def run_options(env: STS2RunEnv, mask: np.ndarray) -> list[tuple[int, str, dict]
     return [(slot, kind, a) for slot, kind, a in options if mask[slot] and kind in _KIND_INDEX]
 
 
-def _fill_options(obs, env: STS2RunEnv, mask: np.ndarray) -> None:
+def _fill_options(obs, env: STS2RunEnv, mask: np.ndarray, routes: dict) -> None:
     mgr = env._mgr
     gold = mgr.run_state.player.gold
-    paths = None
     event = getattr(mgr, "_event_model", None)
     event_id = getattr(event, "event_id", "") or (type(event).__name__ if event is not None else "")
     for i, (slot, kind, action) in enumerate(run_options(env, mask)[:MAX_OPTIONS]):
@@ -412,15 +556,7 @@ def _fill_options(obs, env: STS2RunEnv, mask: np.ndarray) -> None:
             name = f"point:{action.get('point_type')}"
             col, row = action["coord"]
             f[6] = row / 20.0
-            act_map = mgr.run_state.map
-            if act_map is not None:
-                paths = paths if paths is not None else _path_summaries(act_map)
-                coord = MapCoord(col, row)
-                if coord in paths:
-                    low, high = paths[coord]
-                    base = 7 + len(_RARITIES)
-                    f[base:base + len(_PATH_TYPES)] = low / 10.0
-                    f[base + len(_PATH_TYPES):base + 2 * len(_PATH_TYPES)] = high / 10.0
+            f[ROUTE_START:] = route_features(routes, [(col, row)])
         elif kind == "rest_option":
             name = f"rest:{action.get('option_id')}"
         elif kind == "event_choice":
@@ -471,7 +607,11 @@ def encode_run_entities(env: STS2RunEnv, mask: np.ndarray) -> dict[str, np.ndarr
         r[phase_base + _PHASE_INDEX[mgr.phase]] = 1.0
     r[phase_base + len(_PHASE_INDEX)] = float(deck_choice is not None)
 
-    _fill_options(obs, env, mask)
+    if rs.boss_encounter_id:
+        obs["boss_id"][0] = hash_bucket(f"boss:{game_id(rs.boss_encounter_id)}")
+    routes = _cached_routes(rs.map)
+    obs["route_ahead"][:] = route_features(routes, [(c.col, c.row) for c in rs.get_available_next_coords()])
+    _fill_options(obs, env, mask, routes)
     return obs
 
 

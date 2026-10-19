@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from sts2_env.bridge.protocol import BridgeAction, BridgeStateType
+from sts2_env.core.damage import preview_intent_damage
 from sts2_env.core.enums import CardType, TargetType
 
 if TYPE_CHECKING:
@@ -474,7 +475,11 @@ def combat_state_to_bridge_state(combat: CombatState) -> dict[str, Any]:
             if intents:
                 first_intent = intents[0]
                 enemy_data["intent"] = first_intent.intent_type.name
-                enemy_data["intent_damage"] = first_intent.damage
+                # The bridge records the shown damage (AttackIntent.GetSingleDamage).
+                enemy_data["intent_damage"] = (
+                    preview_intent_damage(combat, enemy, first_intent.damage)
+                    if first_intent.is_attack else first_intent.damage
+                )
                 enemy_data["intent_hits"] = first_intent.hits
         enemies.append(enemy_data)
 

@@ -9,15 +9,22 @@ from sts2_env.core.constants import ACTION_SPACE_SIZE, MAX_ENEMIES, MAX_HAND_SIZ
 from sts2_env.entity.model import SpireFormer, SpireFormerConfig, masked_logits
 from sts2_env.entity.observation import (
     MAX_CHOICES,
+    MAX_RELICS,
     OBS_SPEC,
+    ROUTE_START,
     EntityObservationWrapper,
+    _PATH_TYPES,
+    _fill_relics,
     _pending_choice,
     cap_action_mask,
+    empty_observation,
+    hash_bucket,
     run_options,
 )
 from sts2_env.entity.ppo import EntityAgent, stack_observations, to_tensors
 from sts2_env.gym_env.combat_env import STS2CombatEnv
 from sts2_env.gym_env.run_env import _LAYOUT, TOTAL_ACTIONS, STS2RunEnv
+from sts2_env.relics.base import RelicId
 from sts2_env.run.run_manager import RunManager
 from sts2_env.training.config import DEFAULTS, load_config
 from sts2_env.training.environment import make_env
@@ -160,7 +167,19 @@ def test_run_start_shows_deck_relics_and_map_options():
     assert set(obs["option_slots"][obs["option_mask"]]) == set(np.flatnonzero(mask))
     # Path summaries: every route from the first row reaches at least one fight.
     features = obs["option_features"][obs["option_mask"]]
-    assert (features[:, -6] > 0).all()
+    most_monsters = ROUTE_START + len(_PATH_TYPES)
+    assert (features[:, most_monsters] > 0).all()
+    # The same summary, over every first-row node, describes the act from where the player stands.
+    assert obs["route_ahead"][len(_PATH_TYPES)] > 0
+    assert obs["boss_id"][0] == hash_bucket(f"boss:{mgr.run_state.boss_encounter_id}")
+
+
+def test_every_owned_relic_is_encoded_up_to_the_cap_and_overflow_warns():
+    obs = empty_observation()
+    _fill_relics(obs, [relic.name for relic in list(RelicId)[:MAX_RELICS]])
+    assert obs["relic_mask"].all() and (obs["relic_ids"] > 0).all()
+    with pytest.warns(RuntimeWarning, match="MAX_RELICS"):
+        _fill_relics(empty_observation(), list(RelicId)[:MAX_RELICS + 1])
 
 
 def test_every_legal_run_action_is_scored_by_an_item():
