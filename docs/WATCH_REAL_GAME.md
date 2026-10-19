@@ -86,6 +86,32 @@ The reward screen's Skip action now locates the native alternative by
 that searched for nonexistent manager types and could stop a run after its
 first victory.
 
+## Compare and switch trained runs
+
+The **Trained runs** panel lists every Act 1/full-run experiment under `output/`
+(smoke tests and combat-only runs excluded), grouped by folder. Runs still
+training show their progress. Choose whether the table shows the best
+checkpoint's, the final model's or the latest validation results. Columns: wins,
+average floor, boss reached, boss beaten (wins divided by boss visits), timeouts,
+stalls, upgrades per run and the evaluation seeds. Compare runs only when their
+seeds match.
+
+**Watch best** / **Watch final** replaces the live policy at the next decision.
+A paused decision is re-planned by the new model before anything is sent. Only
+runs trained for the live session's character, ascension, opening-event setting
+and objective are offered. A run ID is checked against this list; the page
+cannot load an arbitrary file. Each switch is recorded in `decisions.jsonl`, and
+a model that fails to load leaves the current one playing.
+
+Print the same comparison in a terminal, without the game (for example on the
+training server):
+
+```powershell
+.\.venv\Scripts\python.exe -m sts2_env.watch.player --list best
+```
+
+`--list final` and `--list latest` show the other result sets.
+
 ## Important: same settings are not an identical simulated run
 
 The Python simulator and installed game are different implementations. Applying

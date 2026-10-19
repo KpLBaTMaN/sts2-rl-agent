@@ -25,6 +25,7 @@ from sts2_env.entity.ppo import EntityAgent, stack_observations, to_tensors
 from sts2_env.entity.model import masked_logits
 from sts2_env.watch.entity_adapter import EntityWatchAdapter
 from sts2_env.training.loops import LoopDetector, fingerprint
+from sts2_env.watch.catalog import OUTPUT, discover_runs, find_run, format_table, model_file, playable_reason
 
 ROOT = Path(__file__).resolve().parents[2]
 LOG = logging.getLogger(__name__)
@@ -78,6 +79,49 @@ def prepare(config_file):
     if not 0 <= settings.get("decision_delay", 0.8) <= 5:
         raise ValueError("decision_delay must be between 0 and 5")
     return settings, training, experiment, model_path, live
+
+
+def load_policy(path, entity):
+    """Load an Act 1/full-run policy on the CPU and check it fits the live bridge."""
+    if entity:
+        model, _ = EntityAgent.load(path, device="cpu")
+        if model.model.config.n_actions != 157:
+            raise ValueError("This viewer requires a 157-action Act 1/full-run SpireFormer")
+    else:
+        model = MaskablePPO.load(path, device="cpu")
+        if model.observation_space.shape != (151,) or model.action_space.n != 157:
+            raise ValueError("This viewer requires a 151-input, 157-action Act 1/full-run model")
+    return model
+
+
+def make_adapter(model):
+    return EntityWatchAdapter() if isinstance(model, EntityAgent) else WatchAdapter(model.observation_space.shape[0])
+
+
+def run_id(experiment):
+    """Catalog ID of an experiment folder, or its full path when it lives outside output/."""
+    try:
+        return Path(experiment).resolve().relative_to(OUTPUT.resolve()).as_posix()
+    except ValueError:
+        return str(experiment)
+
+
+def switch_policy(playback, request, model, adapter, transcript):
+    """Load the requested run's policy; keep the current one if it cannot be loaded."""
+    try:
+        new = load_policy(Path(request["path"]), request["entity"])
+    except Exception as exc:
+        LOG.exception("Model switch failed")
+        with playback.condition:
+            playback.error = f"Could not load {request['name']} ({request['model']} model): {exc}"
+        return model, adapter
+    with playback.condition:
+        playback.error = None
+        playback.context.update(model=request["path"], experiment=request["experiment"],
+                                run=request["run"], which=request["model"])
+    transcript.write(json.dumps(dict(model_switch=request)) + "\n")
+    transcript.flush()
+    return new, make_adapter(new)
 
 
 def model_decision(model, adapter, state):
@@ -192,7 +236,7 @@ def compare_map(state, live):
 
 
 def worker(playback, model, live, directory, max_decisions):
-    adapter = EntityWatchAdapter() if isinstance(model, EntityAgent) else WatchAdapter(model.observation_space.shape[0])
+    adapter = make_adapter(model)
     transcript = (directory / "decisions.jsonl").open("a", encoding="utf-8")
     client = STS2GameClient(timeout=2, reconnect_attempts=60, reconnect_delay=2)
     connected = False
@@ -229,15 +273,22 @@ def worker(playback, model, live, directory, max_decisions):
                 map_checked = True
             if playback.count >= max_decisions:
                 raise ValueError("Configured decision limit reached. Automation has stopped.")
-            wire, proposal = model_decision(model, adapter, state)
-            key = decision_key(state, wire)
-            period = loops.push(key)
-            if period:
-                transcript.write(json.dumps(dict(state=state, proposal=proposal, sent=None, fingerprint=key,
-                                                 stopped=f"loop period {period}")) + "\n")
-                transcript.flush()
-                raise ValueError(loop_message(period, loops.repeats, state, proposal))
-            playback.gate(state, proposal)
+            while True:
+                request = playback.take_model_request()
+                if request:
+                    model, adapter = switch_policy(playback, request, model, adapter, transcript)
+                wire, proposal = model_decision(model, adapter, state)
+                key = decision_key(state, wire)
+                period = loops.push(key)
+                if period:
+                    transcript.write(json.dumps(dict(state=state, proposal=proposal, sent=None, fingerprint=key,
+                                                     stopped=f"loop period {period}")) + "\n")
+                    transcript.flush()
+                    raise ValueError(loop_message(period, loops.repeats, state, proposal))
+                if playback.gate(state, proposal):
+                    break
+                # A model switch arrived while waiting: that proposal is never sent.
+                loops.keys.pop()
             # Control messages consume the client's implicit correlation ID too.
             # Attach the game request ID explicitly to the actual decision.
             wire = dict(wire, request_id=state["request_id"])
@@ -266,7 +317,28 @@ def worker(playback, model, live, directory, max_decisions):
         (directory / "summary.json").write_text(json.dumps(playback.snapshot(), indent=2), encoding="utf-8")
 
 
-def make_server(playback, port):
+def run_listing(live, context):
+    runs = discover_runs()
+    for run in runs:
+        run["playable"] = {which: playable_reason(run, live, which) if live else "No live game"
+                           for which in ("best", "final")}
+    return dict(runs=runs, current=dict(run=context.get("run"), model=context.get("which")))
+
+
+def model_request(command, live):
+    """Validate a 'use_model' command against the run catalog; never accept a raw path."""
+    which = command.get("model")
+    run = find_run(str(command.get("run", "")))
+    if run is None or which not in {"best", "final"}:
+        raise ValueError("Unknown run or model")
+    reason = playable_reason(run, live, which)
+    if reason:
+        raise ValueError(reason)
+    return dict(run=run["id"], name=run["name"], model=which, entity=run["entity"], experiment=run["path"],
+                path=str(model_file(Path(run["path"]), run["entity"], which)))
+
+
+def make_server(playback, port, live=None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
             pass
@@ -283,6 +355,10 @@ def make_server(playback, port):
         def do_GET(self):
             if self.path == "/api/state":
                 return self.send_json(playback.snapshot())
+            if self.path == "/api/runs":
+                with playback.condition:
+                    context = dict(playback.context)
+                return self.send_json(run_listing(live, context))
             if self.path != "/":
                 return self.send_error(404)
             data = (Path(__file__).parent / "watch.html").read_bytes()
@@ -301,7 +377,11 @@ def make_server(playback, port):
                 size = int(self.headers.get("Content-Length", 0))
                 if not 0 < size <= 2048:
                     raise ValueError("Invalid request size")
-                playback.control(json.loads(self.rfile.read(size)))
+                command = json.loads(self.rfile.read(size))
+                if command.get("action") == "use_model":
+                    playback.request_model(model_request(command, live))
+                else:
+                    playback.control(command)
                 self.send_json({"ok": True})
             except (ValueError, TypeError, KeyError) as exc:
                 self.send_json({"error": str(exc)}, 400)
@@ -315,18 +395,16 @@ def main():
     parser.add_argument("--headless", action="store_true", help="Diagnostic game check without graphics")
     parser.add_argument("--quit-after", type=int, default=0, help="Diagnostic game frame limit")
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--list", nargs="?", const="best", choices=["best", "final", "latest"],
+                        help="Print every trained run's results (best, final or latest validation) and exit")
     args = parser.parse_args()
+    if args.list:
+        print(format_table(discover_runs(), args.list))
+        return
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     settings, training, experiment, model_path, live = prepare(args.config)
     torch.set_num_threads(4)
-    if training.get("model", {}).get("type", "flat") == "entity":
-        model, _ = EntityAgent.load(model_path, device="cpu")
-        if model.model.config.n_actions != 157:
-            raise ValueError("This viewer requires a 157-action Act 1/full-run SpireFormer")
-    else:
-        model = MaskablePPO.load(model_path, device="cpu")
-        if model.observation_space.shape != (151,) or model.action_space.n != 157:
-            raise ValueError("This viewer requires a 151-input, 157-action Act 1/full-run model")
+    model = load_policy(model_path, training.get("model", {}).get("type", "flat") == "entity")
     game = Path(settings.get("game_path", "E:/SteamLibrary/steamapps/common/Slay the Spire 2"))
     steam = Path(settings.get("steam_path", "C:/Program Files (x86)/Steam/steam.exe"))
     if not game.is_dir() or not steam.is_file():
@@ -343,9 +421,10 @@ def main():
     (directory / "session.json").write_text(json.dumps(session, indent=2), encoding="utf-8")
     playback = Playback(settings.get("start_paused", True), settings.get("decision_delay", 0.8))
     playback.context = dict(model=str(model_path), experiment=str(experiment), **live,
+                            run=run_id(experiment), which=settings.get("model", "final"),
                             records=str(directory), map_comparison="Waiting for live map")
     port = settings.get("port", 8766)
-    server = make_server(playback, port)
+    server = make_server(playback, port, live)
     if not args.no_launch:
         mod_config = game / "mods/STS2BridgeMod/watch-session.json"
         if not mod_config.parent.exists():

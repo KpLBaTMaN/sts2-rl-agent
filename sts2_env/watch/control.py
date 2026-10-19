@@ -27,6 +27,7 @@ class Playback:
         self.error = None
         self.finished = False
         self.context = {}
+        self.pending_model = None
 
     @staticmethod
     def room(state):
@@ -57,7 +58,19 @@ class Playback:
                 raise ValueError("Unknown playback command")
             self.condition.notify_all()
 
+    def request_model(self, choice):
+        """Ask the worker to switch policy; a paused decision is re-planned by the new one."""
+        with self.condition:
+            self.pending_model = choice
+            self.condition.notify_all()
+
+    def take_model_request(self):
+        with self.condition:
+            choice, self.pending_model = self.pending_model, None
+            return choice
+
     def gate(self, state, proposal):
+        """Wait for permission to send; False means a model switch arrived first."""
         with self.condition:
             room = self.room(state)
             hit = (self.skip == "next_room" and room != self.origin or
@@ -71,6 +84,8 @@ class Playback:
             while True:
                 if self.stopped:
                     raise Stopped()
+                if self.pending_model is not None:
+                    return False
                 if self.credits:
                     self.credits -= 1
                     break
@@ -81,6 +96,7 @@ class Playback:
             self.history.appendleft({"decision": self.count, "floor": room[1],
                                      "type": state["type"], "label": proposal["label"], "source": proposal["source"]})
             self.status = "Waiting for game to finish this decision"
+            return True
 
     def snapshot(self):
         with self.condition:
