@@ -52,6 +52,10 @@ public static class WatchSession
         var run = RunManager.Instance.DebugOnlyGetState();
         var player = run == null ? null : LocalContext.GetMe(run);
         if (run == null || player == null) return json;
+        payload["entity_schema"] = 1;
+        payload["deck"] = JsonSerializer.SerializeToNode(player.Deck.Cards.Select(c => RlCombatHandler.SerializeCard(c, false)).ToList());
+        payload["relics"] = JsonSerializer.SerializeToNode(player.Relics.Select(r => r.Id.Entry).ToList());
+        payload["potions"] = JsonSerializer.SerializeToNode(RlCombatHandler.SerializePotions(player));
         payload["run_state"] = new JsonObject {
             ["act_index"] = run.CurrentActIndex,
             // The real game numbers the opening point as floor 1; the sim uses 0.
@@ -70,7 +74,8 @@ public static class WatchSession
             payload["combat_snapshot"] = JsonNode.Parse(new RlCombatHandler().SerializeCombatState(player));
         if (run.Map != null) {
             payload["map_nodes"] = JsonSerializer.SerializeToNode(run.Map.GetAllMapPoints()
-                .Select(p => new { row = p.coord.row, col = p.coord.col, type = p.PointType.ToString() }));
+                .Select(p => new { row = p.coord.row, col = p.coord.col, type = p.PointType.ToString(),
+                    children = p.Children.Select(c => new { row = c.coord.row, col = c.coord.col }).ToArray() }));
         }
         return payload.ToJsonString();
     }

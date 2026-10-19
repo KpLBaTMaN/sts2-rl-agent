@@ -1,10 +1,10 @@
 {
-  "experiment": "output/experiments/act1-seed42-20261015-221936-d15e69",
-  "model": "final",
+  "experiment": "C:\\Users\\40235515\\Desktop\\Code\\sts2-rl-agent\\output\\reward-comparison-20261019\\runs\\long-sparse-20261019-093922-da16c5",
+  "model": "best",
   "seed": null,
   "start_paused": true,
   "decision_delay": 0.8,
   "port": 8766,
-  "game_path": "E:/SteamLibrary/steamapps/common/Slay the Spire 2",
+  "game_path": "C:/Program Files (x86)/Steam/steamapps/common/Slay the Spire 2",
   "steam_path": "C:/Program Files (x86)/Steam/steam.exe"
 }

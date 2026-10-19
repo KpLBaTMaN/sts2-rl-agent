@@ -70,7 +70,7 @@ class ScenarioEnv(gym.Wrapper):
             pool = seed_cfg["values"]
             seed = pool[self.episode_index % len(pool)]
         else:
-            excluded = set(eval_cfg["seeds"]) if eval_cfg["mode"] == "unseen" else set()
+            excluded = (set(eval_cfg["seeds"]) | set(eval_cfg.get("final_seeds") or [])) if eval_cfg["mode"] == "unseen" else set()
             seed = int(self.sequence.integers(0, INT_MAX_EXCLUSIVE))
             while seed in excluded:
                 seed = int(self.sequence.integers(0, INT_MAX_EXCLUSIVE))

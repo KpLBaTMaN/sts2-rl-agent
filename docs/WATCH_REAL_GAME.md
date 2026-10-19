@@ -58,9 +58,33 @@ chosen seed for a random-seed experiment. An explicit integer or real-game seed
 string overrides it. Integer seed 42 is passed to the game as string `"42"`;
 both implementations hash that text to seed their named RNG streams.
 
-Watch mode uses CPU inference for the small policy. GPU is still available for
-training. It requires the 151-input / 157-action Act 1/full-run model. The old
+Watch mode uses CPU inference, leaving the GPU available for training. It accepts
+flat 151-input / 157-action policies and SpireFormer v2 `.pt` Act 1/full-run
+checkpoints with 157 actions. SpireFormer requires the entity-enabled bridge
+(`entity_schema: 1`); an older bridge is rejected rather than silently filling
+missing inputs. The old
 131-input combat model and Play-AI.cmd remain separate.
+
+SpireFormer live transfer remains experimental. Map/deck and starter combat
+encoder regression checks match the simulator. Live unlocks, enemy intent
+calculations, event option identities, generated/enhanced cards and special
+screens can still differ. Do not interpret those checks as an end-to-end live
+game validation.
+
+The initial full-project resource export was quarantined by Microsoft Defender
+as `Trojan:Win32/GodLoader.BS`; that artifact remains quarantined and the
+detection has not been established as a false positive. The bridge does not
+require project resources: its executable code lives in the separate C# DLL.
+Builds now use `scripts/package_bridge.gd` and Godot's official PCKPacker to
+include only the loader's `mod_manifest.json` (320 bytes total). This minimal
+pack passed a local Defender scan with protection enabled, and the installed
+bridge connected to the Sparse model and executed live map and combat decisions.
+No antivirus exclusions or threat allow-list entries were added.
+
+The reward screen's Skip action now locates the native alternative by
+`OptionId == "Skip"` and clicks its actual button. This replaces the old helper
+that searched for nonexistent manager types and could stop a run after its
+first victory.
 
 ## Important: same settings are not an identical simulated run
 
@@ -77,7 +101,19 @@ Act 1 watch runs stop automation when the Act 1 boss is defeated; they do not
 continue into Act 2. Other characters and ascensions are configurable but have
 less live validation than the default Ironclad/ascension-0 case.
 
+The reward collector also remembers attempted rewards while a child card screen
+opens and closes. A skipped card reward is therefore not reopened before Proceed.
+Live verification passed: the policy skipped the first card reward and entered
+the next fight on floor 2.
+
 ## Which decisions use the model?
+
+Combat actions wait for the game's action completion, including any card choices
+opened by a potion or card. End Turn waits until the next playable turn before
+requesting another combat decision. This prevents a pending choice from being
+cancelled by a second request and avoids repeated End Turn on a stalled round.
+The legal-action filter respects the game's `playable` flag. Negative cost alone
+does not identify an X-cost card: unplayable statuses such as Wound also use -1.
 
 Combat, map routes, card rewards, rest sites, shop options and ordinary event
 options are mapped to the same policy action slots as training. The 20 run-state

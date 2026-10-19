@@ -33,6 +33,8 @@ public class RlRewardsScreenHandler : IScreenHandler, IHandler
     private const string UnknownRewardLabel = "unknown";
     private const string GoldRewardLabelPrefix = "gold:";
     private static readonly TimeSpan AgentTimeout = TimeSpan.FromSeconds(AgentTimeoutSeconds);
+    private NRewardsScreen? _currentRewardsScreen;
+    private readonly HashSet<NRewardButton> _attemptedButtons = new();
 
     public Type ScreenType => typeof(NRewardsScreen);
     public TimeSpan Timeout => TimeSpan.FromSeconds(HandlerTimeoutSeconds);
@@ -41,7 +43,14 @@ public class RlRewardsScreenHandler : IScreenHandler, IHandler
     {
         AutoSlayLog.EnterScreen(ScreenLogName);
         NRewardsScreen screen = AutoSlayer.GetCurrentScreen<NRewardsScreen>();
-        HashSet<NRewardButton> attemptedButtons = new();
+        // A child card screen returns to this same rewards screen. Keep attempts
+        // across those invocations so a declined card reward is not reopened.
+        if (!ReferenceEquals(_currentRewardsScreen, screen))
+        {
+            _currentRewardsScreen = screen;
+            _attemptedButtons.Clear();
+        }
+        HashSet<NRewardButton> attemptedButtons = _attemptedButtons;
 
         while (true)
         {

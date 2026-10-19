@@ -25,6 +25,7 @@ DEFAULTS = {
     },
     "evaluation": {
         "mode": "training_seeds", "seeds": list(range(10000, 10100)),
+        "final_seeds": None,
         "every_steps": 20000, "episodes": 20, "final_episodes": 100,
         "deterministic": True, "random_baseline_episodes": 20,
     },
@@ -102,12 +103,21 @@ def load_config(path: str | Path) -> dict:
     if evaluation["mode"] not in {"training_seeds", "seed_list", "unseen"}:
         raise ValueError("evaluation.mode must be training_seeds, seed_list, or unseen")
     _seed_list(evaluation["seeds"], "evaluation.seeds")
+    final_seeds = evaluation["final_seeds"]
+    if final_seeds is not None:
+        _seed_list(final_seeds, "evaluation.final_seeds")
+        if evaluation["mode"] != "unseen":
+            raise ValueError("final_seeds requires evaluation.mode unseen")
+        if len(set(final_seeds)) != len(final_seeds) or set(final_seeds) & set(evaluation["seeds"]):
+            raise ValueError("final_seeds must be unique and separate from periodic evaluation seeds")
+        if len(final_seeds) < evaluation["final_episodes"]:
+            raise ValueError("final_seeds must contain at least final_episodes distinct seeds")
     for key in ("every_steps", "episodes", "final_episodes"):
         _integer(evaluation[key], f"evaluation.{key}", 1)
     _integer(evaluation["random_baseline_episodes"], "evaluation.random_baseline_episodes")
     if type(evaluation["deterministic"]) is not bool:
         raise ValueError("evaluation.deterministic must be true or false")
-    if evaluation["mode"] == "unseen" and seed["mode"] != "random" and set(seed["values"]) & set(evaluation["seeds"]):
+    if evaluation["mode"] == "unseen" and seed["mode"] != "random" and set(seed["values"]) & (set(evaluation["seeds"]) | set(final_seeds or [])):
         raise ValueError("Unseen evaluation seeds overlap training seeds")
     spec = config["model"]
     if spec["type"] not in {"flat", "entity"}:

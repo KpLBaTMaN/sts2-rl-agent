@@ -24,6 +24,7 @@ using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Context;
 using MegaCrit.Sts2.Core.Entities.Cards;
+using MegaCrit.Sts2.Core.Entities.Actions;
 using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.GameActions;
@@ -66,7 +67,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
 
             // Wait for play phase
             await WaitHelper.Until(
-                () => (player.PlayerCombatState?.Phase == PlayerTurnPhase.Play) ||
+                () => CanRequestCombatDecision(player) ||
                       !CombatManager.Instance.IsInProgress,
                 ct, TimeSpan.FromSeconds(30), "Play phase not started");
 
@@ -79,7 +80,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
             int cardsPlayed = 0;
             bool turnEnded = false;
 
-            while (!turnEnded && cardsPlayed < 50 && (player.PlayerCombatState?.Phase == PlayerTurnPhase.Play))
+            while (!turnEnded && cardsPlayed < 50 && CanRequestCombatDecision(player))
             {
                 ct.ThrowIfCancellationRequested();
 
@@ -134,7 +135,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
             // If we ran out of cards to play without ending turn, end it
             if ((player.PlayerCombatState?.Phase == PlayerTurnPhase.Play) && CombatManager.Instance.IsInProgress && !turnEnded)
             {
-                PlayerCmd.EndTurn(player, canBackOut: false);
+                await EndTurnAndWaitAsync(player, ct);
             }
         }
 
@@ -205,7 +206,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
                 case "end_turn":
                 {
                     Logger.Log("[RlCombat] Agent chose to end turn");
-                    PlayerCmd.EndTurn(player, canBackOut: false);
+                    await EndTurnAndWaitAsync(player, ct);
                     return true;
                 }
 
@@ -257,7 +258,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
         else
         {
             Logger.Log("[RlCombat] Random fallback: no playable cards, ending turn");
-            PlayerCmd.EndTurn(player, canBackOut: false);
+            await EndTurnAndWaitAsync(player, ct);
             return true;
         }
     }
@@ -343,21 +344,8 @@ public class RlCombatHandler : IRoomHandler, IHandler
         Player player, CardModel card, Creature? target, CancellationToken ct)
     {
         var playAction = new PlayCardAction(card, target);
-        int energyBefore = player.PlayerCombatState?.Energy ?? -1;
-        int handBefore = PileType.Hand.GetPile(player).Cards.Count;
         RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(playAction);
-        int waitMs = 0;
-        while (waitMs < 3000)
-        {
-            int energyNow = player.PlayerCombatState?.Energy ?? -1;
-            int handNow = PileType.Hand.GetPile(player).Cards.Count;
-            if (energyNow != energyBefore || handNow != handBefore
-                || !(player.PlayerCombatState?.Phase == PlayerTurnPhase.Play)
-                || !CombatManager.Instance.IsInProgress)
-                break;
-            await Task.Delay(50, ct);
-            waitMs += 50;
-        }
+        await WaitForActionAsync(playAction, ct);
     }
 
     private static async Task UsePotionAndWaitAsync(
@@ -389,25 +377,45 @@ public class RlCombatHandler : IRoomHandler, IHandler
             CombatManager.Instance.IsInProgress
         );
         RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(usePotionAction);
+        await WaitForActionAsync(usePotionAction, ct);
+    }
 
-        int waitMs = 0;
-        while (waitMs < 3000)
+    private static bool CanRequestCombatDecision(Player player)
+    {
+        var cm = CombatManager.Instance;
+        return cm.IsInProgress
+            && player.PlayerCombatState?.Phase == PlayerTurnPhase.Play
+            && !cm.IsPlayerReadyToEndTurn(player)
+            && !cm.EndingPlayerTurnPhaseOne && !cm.EndingPlayerTurnPhaseTwo;
+    }
+
+    private static async Task EndTurnAndWaitAsync(Player player, CancellationToken ct)
+    {
+        PlayerCmd.EndTurn(player, canBackOut: false);
+        // PlayerCombatState.Phase can remain Play during the asynchronous end
+        // transition. Do not ask the policy again until the next playable turn.
+        await WaitHelper.Until(
+            () => !CombatManager.Instance.IsInProgress || CanRequestCombatDecision(player),
+            ct, WatchSession.Enabled ? TimeSpan.FromHours(1) : TimeSpan.FromSeconds(30),
+            "The next player turn did not begin after End Turn");
+    }
+
+    private static async Task WaitForActionAsync(GameAction action, CancellationToken ct)
+    {
+        // Spending energy/removing a potion happens BEFORE its effects and any
+        // nested choice finish. A second bridge request would cancel that choice
+        // and can kill the game's action executor. Wait for real completion.
+        while (!action.CompletionTask.IsCompleted)
         {
-            dynamic potionNow = null;
-            try
-            {
-                potionNow = player.GetPotionAtSlotIndex(slot);
-            }
-            catch
-            {
-                potionNow = null;
-            }
-
-            if (potionNow == null || !(player.PlayerCombatState?.Phase == PlayerTurnPhase.Play) || !CombatManager.Instance.IsInProgress)
-                break;
-            await Task.Delay(50, ct);
-            waitMs += 50;
+            ct.ThrowIfCancellationRequested();
+            if (action.State == GameActionState.Canceled)
+                throw new InvalidOperationException($"Combat action was canceled: {action}");
+            RlAutoSlayer.CurrentWatchdog?.Reset("Waiting for combat action / nested choice");
+            await Task.WhenAny(action.CompletionTask, Task.Delay(100, ct));
         }
+        await action.CompletionTask;
+        if (action.Exception != null)
+            throw new InvalidOperationException($"Combat action failed: {action}", action.Exception);
     }
 
     // ----------------------------------------------------------------
@@ -439,6 +447,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
                 ["block"] = playerCreature.Block,
                 ["energy"] = pcs?.Energy ?? 0,
                 ["max_energy"] = pcs?.MaxEnergy ?? 3,
+                ["stars"] = pcs?.Stars ?? 0,
             };
 
             // Player powers
@@ -489,6 +498,9 @@ public class RlCombatHandler : IRoomHandler, IHandler
                 ["draw_pile_count"] = pcs?.DrawPile.Cards.Count ?? 0,
                 ["discard_pile_count"] = pcs?.DiscardPile.Cards.Count ?? 0,
                 ["exhaust_pile_count"] = pcs?.ExhaustPile.Cards.Count ?? 0,
+                ["draw_pile"] = pcs?.DrawPile.Cards.Select(c => SerializeCard(c, false)).ToList() ?? new(),
+                ["discard_pile"] = pcs?.DiscardPile.Cards.Select(c => SerializeCard(c, false)).ToList() ?? new(),
+                ["exhaust_pile"] = pcs?.ExhaustPile.Cards.Select(c => SerializeCard(c, false)).ToList() ?? new(),
                 ["round"] = combatState?.RoundNumber ?? 0,
                 ["floor"] = runState?.TotalFloor ?? 0,
                 ["act"] = (runState?.CurrentActIndex ?? 0) + 1,
@@ -504,7 +516,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
         }
     }
 
-    private Dictionary<string, object> SerializeCard(CardModel card)
+    public static Dictionary<string, object> SerializeCard(CardModel card, bool checkPlayable = true)
     {
         int cost;
         try
@@ -524,8 +536,15 @@ public class RlCombatHandler : IRoomHandler, IHandler
             ["cost"] = cost,
             ["type"] = card.Type.ToString(),
             ["target"] = card.TargetType.ToString(),
-            ["playable"] = card.CanPlay(out reason, out preventer),
+            ["playable"] = checkPlayable && card.CanPlay(out reason, out preventer),
+            ["cost_x"] = card.EnergyCost.CostsX,
+            ["star_cost"] = Math.Max(0, card.CurrentStarCost),
+            ["keywords"] = card.Keywords.Select(k => k.ToString()).ToArray(),
+            ["rarity"] = card.Rarity.ToString(),
+            ["source_pile"] = card.Pile?.Type.ToString() ?? "None",
         };
+        result["base_damage"] = card.DynamicVars.TryGetValue("Damage", out var damage) ? damage.BaseValue : 0;
+        result["base_block"] = card.DynamicVars.TryGetValue("Block", out var block) ? block.BaseValue : 0;
 
         if (card.IsUpgraded)
             result["upgraded"] = true;
@@ -568,6 +587,14 @@ public class RlCombatHandler : IRoomHandler, IHandler
                     AbstractIntent firstIntent = nextMove.Intents[0];
                     data["intent"] = firstIntent.IntentType.ToString();
                     data["intent_move_id"] = nextMove.Id;
+                    data["intents"] = nextMove.Intents.Select(intent => {
+                        var item = new Dictionary<string, object> { ["type"] = intent.IntentType.ToString() };
+                        if (intent is AttackIntent attack && enemy.CombatState != null) {
+                            item["damage"] = attack.GetSingleDamage(enemy.CombatState.PlayerCreatures, enemy);
+                            item["hits"] = attack.Repeats > 0 ? attack.Repeats : 1;
+                        }
+                        return item;
+                    }).ToList();
 
                     if (firstIntent is AttackIntent attackIntent)
                     {
@@ -595,7 +622,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
         return data;
     }
 
-    private static List<Dictionary<string, object>> SerializePotions(Player player)
+    public static List<Dictionary<string, object>> SerializePotions(Player player)
     {
         var potions = new List<Dictionary<string, object>>();
         try

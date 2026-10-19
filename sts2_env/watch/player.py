@@ -21,6 +21,9 @@ from sb3_contrib import MaskablePPO
 from sts2_env.bridge.client import STS2GameClient
 from sts2_env.watch.adapter import WatchAdapter
 from sts2_env.watch.control import Playback, Stopped
+from sts2_env.entity.ppo import EntityAgent, stack_observations, to_tensors
+from sts2_env.entity.model import masked_logits
+from sts2_env.watch.entity_adapter import EntityWatchAdapter
 
 ROOT = Path(__file__).resolve().parents[2]
 LOG = logging.getLogger(__name__)
@@ -37,8 +40,9 @@ def prepare(config_file):
     if set(settings) - allowed:
         raise ValueError(f"Unknown watch options: {set(settings) - allowed}")
     if settings.get("experiment", "latest") == "latest":
-        candidates = [p.parent for p in (ROOT / "output/experiments").glob("*/final_model.zip")
-                      if not p.parent.name.startswith("smoke")]
+        candidates = [p.parent for p in (ROOT / "output").rglob("final_model.*")
+                      if p.suffix in {".zip", ".pt"} and (p.parent / "config.json").exists()
+                      and not p.parent.name.startswith("smoke")]
         if not candidates:
             raise ValueError("No completed training experiments found")
         experiment = max(candidates, key=lambda p: p.stat().st_mtime)
@@ -47,13 +51,12 @@ def prepare(config_file):
     training = json.loads((experiment / "config.json").read_text(encoding="utf-8-sig"))
     if training["task"] == "combat":
         raise ValueError("Watch-Model uses Act 1/full-run experiments. Play-AI.cmd runs the old combat model.")
-    if training.get("model", {}).get("type", "flat") == "entity":
-        raise ValueError("Watch-Model cannot drive the real game with SpireFormer (entity) models yet; "
-                         "pick a flat experiment or watch it in the simulator.")
+    entity = training.get("model", {}).get("type", "flat") == "entity"
     which = settings.get("model", "final")
     if which not in {"final", "best"}:
         raise ValueError("model must be final or best")
-    model_path = experiment / ("final_model.zip" if which == "final" else "best_model/best_model.zip")
+    extension = "pt" if entity else "zip"
+    model_path = experiment / (f"final_model.{extension}" if which == "final" else f"best_model/best_model.{extension}")
     if not model_path.exists():
         raise ValueError(f"Saved model missing: {model_path}")
     seed = settings.get("seed")
@@ -81,16 +84,21 @@ def model_decision(model, adapter, state):
     if automatic:
         wire, label, source = automatic
         return wire, dict(label=label, source=source, probabilities=[])
-    mask = np.zeros(model.action_space.n, dtype=bool)
+    n_actions = model.model.config.n_actions if isinstance(model, EntityAgent) else model.action_space.n
+    mask = np.zeros(n_actions, dtype=bool)
     for action in choices:
         if action >= len(mask):
             raise ValueError("Model action space does not match the bridge")
         mask[action] = True
     obs = adapter.encode(state)
     with torch.no_grad():
-        tensor, _ = model.policy.obs_to_tensor(obs)
-        distribution = model.policy.get_distribution(tensor, action_masks=mask)
-        probabilities = distribution.distribution.probs.cpu().numpy()[0]
+        if isinstance(model, EntityAgent):
+            logits, _ = model.model(to_tensors(stack_observations([obs]), model.device))
+            probabilities = torch.softmax(masked_logits(logits, torch.as_tensor(mask[None], device=model.device)), -1).cpu().numpy()[0]
+        else:
+            tensor, _ = model.policy.obs_to_tensor(obs)
+            distribution = model.policy.get_distribution(tensor, action_masks=mask)
+            probabilities = distribution.distribution.probs.cpu().numpy()[0]
     action = int(np.argmax(probabilities))
     wire, label = choices[action]
     # A live multi-select screen sends the complete required set in one UI decision.
@@ -101,7 +109,7 @@ def model_decision(model, adapter, state):
         wire = {"action": "choose", "indexes": indexes}
         label = f"Select cards {indexes} (ranked by policy)"
     ranked = sorted(choices, key=lambda a: -probabilities[a])[:5]
-    return wire, dict(action=action, label=label, source="Trained Act 1 policy",
+    return wire, dict(action=action, label=label, source="Trained SpireFormer policy" if isinstance(model, EntityAgent) else "Trained Act 1 policy",
                       probabilities=[dict(label=choices[a][1], probability=float(probabilities[a])) for a in ranked])
 
 
@@ -123,7 +131,7 @@ def compare_map(state, live):
 
 
 def worker(playback, model, live, directory, max_decisions):
-    adapter = WatchAdapter(model.observation_space.shape[0])
+    adapter = EntityWatchAdapter() if isinstance(model, EntityAgent) else WatchAdapter(model.observation_space.shape[0])
     transcript = (directory / "decisions.jsonl").open("a", encoding="utf-8")
     client = STS2GameClient(timeout=2, reconnect_attempts=60, reconnect_delay=2)
     connected = False
@@ -241,9 +249,14 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     settings, training, experiment, model_path, live = prepare(args.config)
     torch.set_num_threads(4)
-    model = MaskablePPO.load(model_path, device="cpu")
-    if model.observation_space.shape != (151,) or model.action_space.n != 157:
-        raise ValueError("This viewer requires a 151-input, 157-action Act 1/full-run model")
+    if training.get("model", {}).get("type", "flat") == "entity":
+        model, _ = EntityAgent.load(model_path, device="cpu")
+        if model.model.config.n_actions != 157:
+            raise ValueError("This viewer requires a 157-action Act 1/full-run SpireFormer")
+    else:
+        model = MaskablePPO.load(model_path, device="cpu")
+        if model.observation_space.shape != (151,) or model.action_space.n != 157:
+            raise ValueError("This viewer requires a 151-input, 157-action Act 1/full-run model")
     game = Path(settings.get("game_path", "E:/SteamLibrary/steamapps/common/Slay the Spire 2"))
     steam = Path(settings.get("steam_path", "C:/Program Files (x86)/Steam/steam.exe"))
     if not game.is_dir() or not steam.is_file():

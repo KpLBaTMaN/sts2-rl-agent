@@ -20,6 +20,7 @@ using MegaCrit.Sts2.Core.AutoSlay.Helpers;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
+using MegaCrit.Sts2.Core.Entities.CardRewardAlternatives;
 using MegaCrit.Sts2.Core.Random;
 
 namespace STS2BridgeMod;
@@ -60,6 +61,8 @@ public class RlCardRewardScreenHandler : IScreenHandler, IHandler
             var card = holders[i].CardModel;
             if (card != null)
             {
+                cardData = RlCombatHandler.SerializeCard(card, false);
+                cardData["index"] = i;
                 cardData["id"] = card.Id.Entry;
                 cardData["type"] = card.Type.ToString();
                 cardData["cost"] = card.EnergyCost.Canonical;
@@ -96,7 +99,7 @@ public class RlCardRewardScreenHandler : IScreenHandler, IHandler
                     if (action == NonCombatBridgeProtocol.SkipAction)
                     {
                         Logger.Log("[RlCardReward] Agent chose to skip");
-                        if (!TrySkipCardReward())
+                        if (!await TrySkipCardReward(screen, ct))
                             Logger.Log("[RlCardReward] Skip action could not be executed");
                         return;
                     }
@@ -108,7 +111,7 @@ public class RlCardRewardScreenHandler : IScreenHandler, IHandler
                         if (idx >= holders.Count)
                         {
                             Logger.Log("[RlCardReward] Agent chose to skip via out-of-range choose");
-                            if (!TrySkipCardReward())
+                            if (!await TrySkipCardReward(screen, ct))
                                 Logger.Log("[RlCardReward] Out-of-range skip action could not be executed");
                             return;
                         }
@@ -142,56 +145,21 @@ public class RlCardRewardScreenHandler : IScreenHandler, IHandler
         Logger.Log("[RlCardReward] Card reward screen handled");
     }
 
-    private static bool TrySkipCardReward()
+    private static async Task<bool> TrySkipCardReward(NCardRewardSelectionScreen screen, CancellationToken ct)
     {
-        try
-        {
-            Type rewardType = FindGameType("RewardScreen") ?? FindGameType("CardRewardManager");
-            dynamic rs = rewardType?.GetProperty("Instance")?.GetValue(null);
-            if (rs == null)
-                return false;
-
-            try
-            {
-                rs.Skip();
-                return true;
-            }
-            catch { }
-
-            try
-            {
-                rs.Dismiss();
-                return true;
-            }
-            catch { }
-        }
-        catch (Exception ex)
-        {
-                if (WatchSession.Enabled) throw;
-            Logger.Log($"[RlCardReward] Skip helper error: {ex.Message}");
-        }
-
-        return false;
-    }
-
-    private static Type? FindGameType(string typeName)
-    {
-        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            Type? found = null;
-            try
-            {
-                found = assembly.GetTypes().FirstOrDefault(t => t.Name == typeName);
-            }
-            catch (ReflectionTypeLoadException ex)
-            {
-                found = ex.Types.FirstOrDefault(t => t?.Name == typeName);
-            }
-
-            if (found != null)
-                return found;
-        }
-
-        return null;
+        // The native screen creates these buttons in _extraOptions order.
+        // Identify Skip by its stable option ID, never by translated text.
+        var options = typeof(NCardRewardSelectionScreen)
+            .GetField("_extraOptions", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?.GetValue(screen) as IReadOnlyList<CardRewardAlternative>;
+        var buttons = UiHelper.FindAll<NCardRewardAlternativeButton>(screen);
+        if (options == null || buttons.Count != options.Count) return false;
+        int index = Enumerable.Range(0, options.Count).FirstOrDefault(
+            i => string.Equals(options[i].OptionId, "Skip", StringComparison.OrdinalIgnoreCase), -1);
+        if (index < 0) return false;
+        await UiHelper.Click(buttons[index]);
+        await WaitHelper.Until(() => !GodotObject.IsInstanceValid(screen) || !screen.IsVisibleInTree(),
+            ct, TimeSpan.FromSeconds(CloseTimeoutSeconds), "Card reward screen did not close after Skip");
+        return true;
     }
 }

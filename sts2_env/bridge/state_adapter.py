@@ -263,12 +263,13 @@ class StateAdapter:
             card = hand[i]
             cost = card.get("cost", 0)
 
-            # Check if card is playable (enough energy, cost >= 0)
-            if cost < 0:
-                # X-cost cards (cost = -1) are always playable if energy > 0
-                if energy <= 0:
+            # The live game's CanPlay result includes keywords, powers, stars
+            # and special costs. Cost alone cannot establish legality: Wound
+            # and other unplayable cards also use -1, just like some X costs.
+            if "playable" in card:
+                if not card["playable"]:
                     continue
-            elif cost > energy:
+            elif not card.get("cost_x", False) and (cost < 0 or cost > energy):
                 continue
 
             target_type = card.get("target", "Self")

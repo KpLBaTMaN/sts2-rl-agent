@@ -27,7 +27,7 @@ def project_path(value):
     return path if path.is_absolute() else PROJECT_ROOT / path
 
 
-def evaluate(config, episodes, model=None):
+def evaluate(config, episodes, model=None, progress=None):
     """Evaluate with explicit success flags; timeouts are never counted as wins."""
     env = make_env(config, evaluation=True)
     rng = np.random.default_rng(config["training"]["model_seed"] + 777)
@@ -54,6 +54,8 @@ def evaluate(config, episodes, model=None):
                                      death_room=info["death_room"], timed_out=info["timed_out"], reward=score,
                                      **{f"reward_{term}": value for term, value in info["reward_terms"].items()},
                                      **info.get("run_stats", {})))
+                    if progress:
+                        progress(episode + 1, episodes)
                     break
     finally:
         env.close()
@@ -83,6 +85,14 @@ def evaluate(config, episodes, model=None):
     else:
         summary.update(run_summary(rows))
     return summary, rows
+
+
+def final_evaluation_config(config):
+    """Final holdout is reserved from training and checkpoint selection."""
+    seeds = config["evaluation"].get("final_seeds")
+    if not seeds:
+        return config
+    return dict(config, evaluation=dict(config["evaluation"], seeds=seeds))
 
 
 RUN_AVERAGES = ("act", "gold", "max_hp", "deck_size", "upgraded_cards", "attacks", "skills", "powers",
@@ -222,7 +232,7 @@ def run(config, config_path):
         model.save(directory / ("interrupted_model" if interrupted else "final_model"))
         if interrupted:
             return directory
-        summary, rows = evaluate(config, evaluation["final_episodes"], model=model)
+        summary, rows = evaluate(final_evaluation_config(config), evaluation["final_episodes"], model=model)
         summary.update(training_seconds=time.perf_counter() - started,
                        requested_timesteps=train["total_timesteps"],
                        actual_new_timesteps=model.num_timesteps - initial_steps,
@@ -231,7 +241,7 @@ def run(config, config_path):
         best = directory / "best_model/best_model.zip"
         if best.exists():
             best_model = MaskablePPO.load(best, device=train["device"])
-            best_summary, best_rows = evaluate(config, evaluation["final_episodes"], best_model)
+            best_summary, best_rows = evaluate(final_evaluation_config(config), evaluation["final_episodes"], best_model)
             save_evaluation(directory, "best-results", best_summary, best_rows)
         print(f"\n{format_summary(summary)}", flush=True)
         print(f"Results and models: {directory}", flush=True)

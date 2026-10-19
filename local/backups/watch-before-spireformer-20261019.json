@@ -1,0 +1,10 @@
+{
+  "experiment": "output/experiments/act1-seed42-20261015-221936-d15e69",
+  "model": "final",
+  "seed": null,
+  "start_paused": true,
+  "decision_delay": 0.8,
+  "port": 8766,
+  "game_path": "E:/SteamLibrary/steamapps/common/Slay the Spire 2",
+  "steam_path": "C:/Program Files (x86)/Steam/steam.exe"
+}

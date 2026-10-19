@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from sts2_env.bridge.state_adapter import StateAdapter
 from sts2_env.core.constants import POTION_ACTION_START, POTION_TARGET_OPTIONS
 
@@ -79,3 +81,22 @@ def test_decode_action_returns_out_of_hand_play_payload_for_potion() -> None:
         "potion_slot": 1,
         "target_index": 0,
     }
+
+
+@pytest.mark.parametrize("card,energy,allowed", [
+    ({"id": "WOUND", "cost": -1, "playable": False}, 2, False),
+    ({"id": "DEFEND_IRONCLAD", "cost": 1, "playable": False}, 3, False),
+    ({"id": "CASCADE", "cost": -1, "cost_x": True, "playable": False}, 3, False),
+    ({"id": "SPECIAL_COST", "cost": 3, "playable": True}, 0, True),
+    ({"id": "WOUND", "cost": -1}, 2, False),
+    ({"id": "CASCADE", "cost": -1, "cost_x": True}, 0, True),
+    ({"id": "DEFEND_IRONCLAD", "cost": 1}, 0, False),
+    ({"id": "DEFEND_IRONCLAD", "cost": 1}, 1, True),
+])
+def test_card_mask_respects_game_legality_and_explicit_x_cost(card, energy, allowed):
+    state = _base_state()
+    state["player"]["energy"] = energy
+    state["hand"] = [dict(target="Self", **card)]
+    mask = StateAdapter().compute_action_mask(state)
+    assert bool(mask[1]) is allowed
+    assert mask[0] == 1

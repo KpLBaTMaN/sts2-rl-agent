@@ -1,5 +1,11 @@
 # STS2 RL Agent
 
+## Live training dashboard
+
+Compare sparse, shaped and survival rewards in three sequential SpireFormer runs
+with live charts, a comparison table, searchable settings and GPU telemetry.
+See [the dashboard guide](docs/TRAINING_DASHBOARD.md) for launching and viewing a queue.
+
 ## Local configurable training
 
 To watch a saved Act 1 model in the real Steam game, run `Watch-Model.cmd`.

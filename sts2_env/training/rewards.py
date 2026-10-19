@@ -20,7 +20,7 @@ REWARDS_DIR = PROJECT_ROOT / "local" / "config" / "rewards"
 
 # Every term defaults to zero, so a profile only lists what it pays for.
 WEIGHT_KEYS = ("win", "death", "timeout", "floor", "hp", "elite",
-               "enemy_damage", "max_hp", "relic", "gold")
+               "enemy_damage", "max_hp", "relic", "gold", "upgrade")
 TERMS = WEIGHT_KEYS[3:]
 TEXT_KEYS = ("profile", "description")
 HP_CURVES = ("dota", "linear")
@@ -33,6 +33,11 @@ BUILTIN_PROFILES = {
                "win": 5.0, "death": -1.0, "timeout": -1.0, "floor": 0.1, "hp": 1.0,
                "hp_curve": "dota", "elite": 0.3, "enemy_damage": 0.05,
                "max_hp": 0.01, "relic": 0.05, "gold": 0.0},
+}
+BUILTIN_PROFILES["deckbuilder"] = {
+    **BUILTIN_PROFILES["shaped"],
+    "description": "Experimental permanent-upgrade shaping with reduced immediate HP weight.",
+    "hp": 0.5, "upgrade": 0.1,
 }
 
 
@@ -120,6 +125,7 @@ class RewardTracker:
         self._tracked_combat = None
         self._enemy_total = 0.0
         self._known_enemies: dict[int, list] = {}  # id -> [creature, credited damage]
+        self._credited_upgrades: dict[int, object] = {}
         self._before = self._snapshot(env) if env is not None else None
 
     # ---- state access -------------------------------------------------
@@ -133,18 +139,21 @@ class RewardTracker:
         combat = self._combat(env)
         if self.task == "combat":
             player, floor, relics, gold, room = combat.player, 0, 0, 0, None
+            deck = ()
         else:
             mgr = env._mgr
             run_player = mgr.run_state.player
             player = combat.player if combat is not None else run_player
             floor, relics, gold = mgr.run_state.total_floor, len(run_player.relics), run_player.gold
             room = mgr._current_room_type
+            # Read the permanent deck, never temporary cards in combat piles.
+            deck = getattr(run_player, "deck", ()) if self.weights.get("upgrade", 0) else ()
         enemies = {}
         if combat is not None:
             enemies = {id(e): (e, max(e.current_hp, 0)) for e in combat.enemies}
         return dict(hp=player.current_hp, max_hp=player.max_hp, floor=floor, relics=relics, gold=gold,
                     room=room, combat=combat, combat_over=combat.is_over if combat is not None else True,
-                    enemies=enemies)
+                    enemies=enemies, deck={id(c): (c, bool(c.upgraded)) for c in deck})
 
     # ---- reward -------------------------------------------------------
 
@@ -159,6 +168,13 @@ class RewardTracker:
         terms["floor"] = w["floor"] * max(after["floor"] - before["floor"], 0)
         terms["relic"] = w["relic"] * max(after["relics"] - before["relics"], 0)
         terms["gold"] = w["gold"] * max(after["gold"] - before["gold"], 0)
+        if w.get("upgrade", 0):
+            for key, (card, upgraded) in after["deck"].items():
+                previous = before["deck"].get(key)
+                if (previous is not None and previous[0] is card and not previous[1]
+                        and upgraded and key not in self._credited_upgrades):
+                    self._credited_upgrades[key] = card
+                    terms["upgrade"] += w["upgrade"]
 
         combat = before["combat"]
         if combat is not None:

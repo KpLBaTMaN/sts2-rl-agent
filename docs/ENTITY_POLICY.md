@@ -74,4 +74,7 @@ elite and boss, so this task cannot separate them.
 - Monster, potion and event-option IDs are strings hashed into 1,024 buckets.
 - Card-bundle rewards and the card-reward "sacrifice" option are not reachable in the run environment (for either model).
 - Models saved before the run update (`spireformer-v1`) must be retrained.
-- The real-game watch tool and bridge still run flat SB3 models only.
+- The real-game watch tool now has a SpireFormer v2 adapter requiring the updated
+  entity-enabled mod. Encoder regression checks pass, and the Sparse checkpoint
+  has executed live map and combat decisions. Transfer parity and live win rates
+  still need broader evaluation. The resource pack contains only the manifest.

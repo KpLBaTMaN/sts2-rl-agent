@@ -22,5 +22,8 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["sts2_env*"]
 
+[tool.setuptools.package-data]
+"sts2_env.training" = ["dashboard_assets/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

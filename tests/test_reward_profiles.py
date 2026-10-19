@@ -39,6 +39,7 @@ def test_overrides_inline_objects_and_paths(tmp_path):
 def test_builtin_profiles_work_without_local_files(monkeypatch, tmp_path):
     monkeypatch.setattr(rewards, "REWARDS_DIR", tmp_path)
     assert resolve_reward(config(reward="shaped"))["win"] == 5
+    assert resolve_reward(config(reward="deckbuilder"))["upgrade"] == 0.1
     with pytest.raises(ValueError, match="not found"):
         resolve_reward(config(reward="missing"))
 
@@ -141,3 +142,73 @@ def test_reviving_enemy_cannot_be_farmed_for_damage_reward():
         eye.current_hp = 6
         tracker.step(_fake_run(RoomType.MONSTER, combat), False, False, False)
     assert tracker.totals["enemy_damage"] == pytest.approx(0.05)
+
+
+def test_permanent_upgrade_pays_once_and_not_for_new_upgraded_cards():
+    env = _fake_run(RoomType.REST_SITE, None, hp=80)
+    card = SimpleNamespace(upgraded=False)
+    env._mgr.run_state.player.deck = [card]
+    tracker = RewardTracker(resolve_reward(config(reward="deckbuilder")), "act1")
+    tracker.reset(env)
+    # Selecting Smith without completing its choice earns nothing.
+    _, terms = tracker.step(env, False, False, False)
+    assert terms["upgrade"] == 0
+    card.upgraded = True
+    _, terms = tracker.step(env, False, False, False)
+    assert terms["upgrade"] == pytest.approx(0.1)
+    env._mgr.run_state.player.deck.append(SimpleNamespace(upgraded=True))
+    _, terms = tracker.step(env, False, False, False)
+    assert terms["upgrade"] == 0
+    # Even a downgrade/re-upgrade cannot repeatedly farm the same instance.
+    card.upgraded = False
+    tracker.step(env, False, False, False)
+    card.upgraded = True
+    tracker.step(env, False, False, False)
+    assert tracker.totals["upgrade"] == pytest.approx(0.1)
+
+
+def test_deckbuilder_heal_and_upgrade_tradeoff():
+    weights = resolve_reward(config(reward="deckbuilder"))
+    def heal_reward(hp, healed):
+        env = _fake_run(RoomType.REST_SITE, None, hp=hp)
+        tracker = RewardTracker(weights, "act1")
+        tracker.reset(env)
+        env._mgr.run_state.player.current_hp = min(80, hp + healed)
+        _, terms = tracker.step(env, False, False, False)
+        return terms["hp"]
+    assert heal_reward(80, 24) == 0
+    assert heal_reward(77, 24) < weights["upgrade"]
+    assert heal_reward(20, 24) > weights["upgrade"]
+
+
+def test_temporary_combat_upgrade_earns_no_permanent_deck_reward():
+    permanent = SimpleNamespace(upgraded=False)
+    temporary = SimpleNamespace(upgraded=False)
+    combat = SimpleNamespace(enemies=[], is_over=False, player_won=False,
+                             player=SimpleNamespace(current_hp=50, max_hp=80),
+                             hand=[temporary])
+    env = _fake_run(RoomType.MONSTER, combat)
+    env._mgr.run_state.player.deck = [permanent]
+    tracker = RewardTracker(resolve_reward(config(reward="deckbuilder")), "act1")
+    tracker.reset(env)
+    temporary.upgraded = True
+    _, terms = tracker.step(env, False, False, False)
+    assert terms["upgrade"] == 0
+
+
+def test_real_smith_choice_pays_after_card_selection():
+    from sts2_env.gym_env.run_env import _REST_START
+    env = ScenarioEnv(config(task="act1", reward="deckbuilder"))
+    try:
+        env.reset()
+        mgr = env.env._mgr
+        mgr._enter_rest_site()
+        env.rewards.reset(env.env)
+        _, reward, _, _, _ = env.step(_REST_START + 1)
+        assert reward == 0
+        _, reward, _, _, _ = env.step(1)  # Complete the pending upgrade choice.
+        assert reward == pytest.approx(0.1)
+        assert env.rewards.totals["upgrade"] == pytest.approx(0.1)
+        assert sum(c.upgraded for c in mgr.run_state.player.deck) == 1
+    finally:
+        env.close()

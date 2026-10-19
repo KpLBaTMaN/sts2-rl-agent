@@ -46,12 +46,8 @@ public class RlCardSelector : ICardSelector
         for (int i = 0; i < cardList.Count; i++)
         {
             CardModel card = cardList[i];
-            var cardData = new Dictionary<string, object>
-            {
-                ["index"] = i,
-                ["id"] = card.Id.Entry,
-                ["type"] = card.Type.ToString(),
-            };
+            var cardData = RlCombatHandler.SerializeCard(card, false);
+            cardData["index"] = i;
             if (card.IsUpgraded)
                 cardData["upgraded"] = true;
             cards.Add(cardData);
@@ -108,13 +104,8 @@ public class RlCardSelector : ICardSelector
         for (int i = 0; i < options.Count; i++)
         {
             CardModel card = options[i].Card;
-            var cardData = new Dictionary<string, object>
-            {
-                ["index"] = i,
-                ["id"] = card.Id.Entry,
-                ["type"] = card.Type.ToString(),
-                ["cost"] = card.EnergyCost.Canonical,
-            };
+            var cardData = RlCombatHandler.SerializeCard(card, false);
+            cardData["index"] = i;
             if (card.IsUpgraded)
                 cardData["upgraded"] = true;
             cards.Add(cardData);

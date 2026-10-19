@@ -547,6 +547,7 @@ public class RlShopRoomHandler : IRoomHandler, IHandler
             ["description"] = $"Cost: {slot.Entry.Cost}",
             ["enabled"] = slot.Entry.IsStocked && slot.Entry.EnoughGold,
             ["price"] = slot.Entry.Cost,
+            ["item_id"] = ShopEntryId(slot),
         };
         return option;
     }
@@ -719,6 +720,7 @@ public class RlEventRoomHandler : IRoomHandler, IHandler
                     ["description"] = option.Option.Description.GetFormattedText(),
                     ["enabled"] = !option.Option.IsLocked,
                     ["event_id"] = option.Event.Id.Entry,
+                    ["option_id"] = option.Option.TextKey,
                 }).ToList(),
                 ["floor"] = RunManager.Instance.DebugOnlyGetState().TotalFloor,
                 ["act"] = RunManager.Instance.DebugOnlyGetState().CurrentActIndex + 1,

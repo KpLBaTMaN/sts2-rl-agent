@@ -128,9 +128,9 @@
 
     <Target Name="GodotExport" AfterTargets="Build;Publish" Condition="'$(GodotPath)' != '' and Exists('$(GodotPath)') and '$(IsInnerGodotExport)' != 'true'">
         <Message Text="Exporting Godot .pck to mods folder" Importance="high"/>
-        <Exec Command="&quot;$(GodotPath)&quot; --headless --export-pack &quot;BasicExport&quot; &quot;$(ModsPath)$(MSBuildProjectName)/$(MSBuildProjectName).pck&quot;"
+        <Exec Command="&quot;$(GodotPath)&quot; --headless --path &quot;$(MSBuildProjectDirectory)&quot; --script &quot;$(MSBuildProjectDirectory)/../scripts/package_bridge.gd&quot; -- &quot;$(MSBuildProjectDirectory)/mod_manifest.json&quot; &quot;$(ModsPath)$(MSBuildProjectName)/$(MSBuildProjectName).pck&quot;"
               EnvironmentVariables="IsInnerGodotExport=true;MSBUILDDISABLENODEREUSE=1"
-              ContinueOnError="WarnAndContinue"/>
+              />
     </Target>
 
     <Target Name="GodotExportSkipped" AfterTargets="Build;Publish" Condition="'$(GodotPath)' == '' or !Exists('$(GodotPath)')">

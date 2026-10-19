@@ -21,6 +21,7 @@ from torch.utils.tensorboard import SummaryWriter
 from sts2_env.entity.model import SpireFormer, SpireFormerConfig, masked_logits
 from sts2_env.entity.observation import OBS_SPEC
 from sts2_env.training.environment import make_env
+from sts2_env.training.telemetry import publish
 
 # SB3 PPO defaults, kept identical so only the policy differs from the flat baseline.
 GAE_LAMBDA = 0.95
@@ -132,6 +133,20 @@ def train_entity(config: dict, directory: Path, evaluate, save_evaluation, proje
     started = time.perf_counter()
     start_steps = num_timesteps
     interrupted = False
+    publish(directory, "starting", steps=num_timesteps, target_steps=target, model=model.describe(), device=str(device))
+
+    def evaluation_pass(label, evaluated_agent, final=False):
+        from sts2_env.training.runner import final_evaluation_config
+        eval_config = final_evaluation_config(config) if final else config
+        count = evaluation["final_episodes"] if final else evaluation["episodes"]
+        def progress(completed, total):
+            publish(directory, "evaluating", steps=num_timesteps, label=label,
+                    completed=completed, episodes=total, elapsed_seconds=time.perf_counter() - started)
+        progress(0, count)
+        summary, rows = evaluate(eval_config, count, model=evaluated_agent, progress=progress)
+        publish(directory, "evaluation", steps=num_timesteps, label=label, summary=summary,
+                elapsed_seconds=time.perf_counter() - started)
+        return summary, rows
 
     try:
         while num_timesteps < target:
@@ -224,6 +239,13 @@ def train_entity(config: dict, directory: Path, evaluate, save_evaluation, proje
             for term in (reward_window[0] if reward_window else ()):
                 writer.add_scalar(f"reward/{term}", float(np.mean([r[term] for r in reward_window])), num_timesteps)
             run_window = recent_runs[-200:]
+            publish(directory, "rollout", steps=num_timesteps, target_steps=target,
+                    elapsed_seconds=time.perf_counter() - started, fps=fps,
+                    train_win_rate=win_rate, floor=mean_floor, episode_length=mean_length,
+                    reward=mean_reward, episodes=len(recent), policy_loss=float(policy_loss),
+                    value_loss=float(value_loss), entropy=float(entropy), clip_fraction=float(clip_fraction),
+                    reward_terms={term: float(np.mean([r[term] for r in reward_window])) for term in (reward_window[0] if reward_window else ())},
+                    run_averages={key: float(np.mean([r[key] for r in run_window])) for key in (run_window[0] if run_window else ()) if isinstance(run_window[0][key], (int, float))})
             for key, tag in (("gold", "gold_mean"), ("deck_size", "deck_size_mean"), ("relic_count", "relics_mean")):
                 if run_window:
                     writer.add_scalar(f"rollout/{tag}", float(np.mean([r[key] for r in run_window])), num_timesteps)
@@ -239,9 +261,12 @@ def train_entity(config: dict, directory: Path, evaluate, save_evaluation, proje
 
             if num_timesteps >= next_checkpoint:
                 agent.save(directory / "checkpoints" / f"spireformer_{num_timesteps}_steps.pt", num_timesteps, optimizer)
+                publish(directory, "checkpoint", steps=num_timesteps, scheduled_steps=next_checkpoint,
+                        file=f"checkpoints/spireformer_{num_timesteps}_steps.pt")
                 next_checkpoint += train["checkpoint_every"]
             if num_timesteps >= next_eval:
-                summary, _ = evaluate(config, evaluation["episodes"], model=agent)
+                summary, rows = evaluation_pass("periodic", agent)
+                save_evaluation(directory, "latest-evaluation", summary, rows)
                 writer.add_scalar("eval/success_rate", summary["win_rate"], num_timesteps)
                 print(f"  eval: {summary['wins']}/{summary['episodes']} wins"
                       + ("" if config["task"] == "combat" else f", average floor {summary['average_floor']:.2f}"), flush=True)
@@ -250,6 +275,7 @@ def train_entity(config: dict, directory: Path, evaluate, save_evaluation, proje
                     best_score = score
                     agent.save(directory / "best_model" / "best_model.pt", num_timesteps)
                 next_eval += evaluation["every_steps"]
+                publish(directory, "training", steps=num_timesteps)
     except KeyboardInterrupt:
         interrupted = True
         print("Interrupted; saving the current model.", flush=True)
@@ -260,9 +286,10 @@ def train_entity(config: dict, directory: Path, evaluate, save_evaluation, proje
 
     agent.save(directory / ("interrupted_model.pt" if interrupted else "final_model.pt"), num_timesteps, optimizer)
     if interrupted:
+        publish(directory, "interrupted", steps=num_timesteps)
         return agent
 
-    summary, rows = evaluate(config, evaluation["final_episodes"], model=agent)
+    summary, rows = evaluation_pass("final", agent, final=True)
     summary.update(training_seconds=time.perf_counter() - started,
                    requested_timesteps=train["total_timesteps"],
                    actual_new_timesteps=num_timesteps - start_steps,
@@ -272,9 +299,10 @@ def train_entity(config: dict, directory: Path, evaluate, save_evaluation, proje
     best = directory / "best_model" / "best_model.pt"
     if best.exists():
         best_agent, _ = EntityAgent.load(best, device)
-        best_summary, best_rows = evaluate(config, evaluation["final_episodes"], model=best_agent)
+        best_summary, best_rows = evaluation_pass("best", best_agent, final=True)
         save_evaluation(directory, "best-results", best_summary, best_rows)
     (directory / "model.json").write_text(json.dumps(model.describe(), indent=2), encoding="utf-8")
+    publish(directory, "completed", steps=num_timesteps, elapsed_seconds=time.perf_counter() - started)
     from sts2_env.training.runner import format_summary
     print(f"\n{format_summary(summary)}", flush=True)
     print(f"Results and models: {directory}", flush=True)

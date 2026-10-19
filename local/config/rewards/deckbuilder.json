@@ -1,0 +1,15 @@
+{
+  "description": "Experimental deck-building shaping: reward successful permanent upgrades, reduce immediate HP shaping, and keep boss victory as the objective. No reward for deck size or choosing Rest itself.",
+  "win": 5.0,
+  "death": -1.0,
+  "timeout": -1.0,
+  "floor": 0.1,
+  "hp": 0.5,
+  "hp_curve": "dota",
+  "elite": 0.3,
+  "enemy_damage": 0.05,
+  "max_hp": 0.01,
+  "relic": 0.05,
+  "gold": 0.0,
+  "upgrade": 0.1
+}

@@ -49,6 +49,7 @@ extracted_pck/
 *.log
 .pytest_cache/
 .specstory/
+local/tools/
 
 # NuGet
 nuget.config
