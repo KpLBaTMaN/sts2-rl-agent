@@ -122,6 +122,8 @@ def train_entity(config: dict, directory: Path, evaluate, save_evaluation, proje
     current = [env.reset()[0] for env in envs]
     current_done = np.zeros(n_envs, dtype=np.float32)
     recent: list[tuple[float, float, float]] = []  # (success, episode length, floor)
+    recent_rewards: list[dict] = []  # per-term reward totals of finished episodes
+    recent_runs: list[dict] = []  # end-of-run snapshots (absent for combat-only tasks)
     episode_lengths = np.zeros(n_envs, dtype=np.int64)
     best_score = (-1.0, -1.0)  # (win rate, average floor): floors break ties before any wins
     next_eval = num_timesteps + evaluation["every_steps"]
@@ -156,6 +158,9 @@ def train_entity(config: dict, directory: Path, evaluate, save_evaluation, proje
                     current_done[i] = float(terminated or truncated)
                     if terminated or truncated:
                         recent.append((float(info["is_success"]), float(episode_lengths[i]), float(info["floor"])))
+                        recent_rewards.append(info["reward_terms"])
+                        if "run_stats" in info:
+                            recent_runs.append(info["run_stats"])
                         episode_lengths[i] = 0
                         next_obs, _ = env.reset()
                     current[i] = next_obs
@@ -214,15 +219,23 @@ def train_entity(config: dict, directory: Path, evaluate, save_evaluation, proje
             mean_length = float(np.mean([n for _, n, _ in window])) if window else 0.0
             mean_floor = float(np.mean([f for _, _, f in window])) if window else 0.0
             fps = (num_timesteps - start_steps) / (time.perf_counter() - started)
+            reward_window = recent_rewards[-200:]
+            mean_reward = float(np.mean([sum(r.values()) for r in reward_window])) if reward_window else 0.0
+            for term in (reward_window[0] if reward_window else ()):
+                writer.add_scalar(f"reward/{term}", float(np.mean([r[term] for r in reward_window])), num_timesteps)
+            run_window = recent_runs[-200:]
+            for key, tag in (("gold", "gold_mean"), ("deck_size", "deck_size_mean"), ("relic_count", "relics_mean")):
+                if run_window:
+                    writer.add_scalar(f"rollout/{tag}", float(np.mean([r[key] for r in run_window])), num_timesteps)
             for name, value in (("train/policy_loss", policy_loss), ("train/value_loss", value_loss),
                                 ("train/entropy", entropy), ("train/clip_fraction", clip_fraction),
                                 ("rollout/success_rate", win_rate), ("rollout/ep_len_mean", mean_length),
-                                ("rollout/floor_mean", mean_floor),
+                                ("rollout/floor_mean", mean_floor), ("rollout/ep_rew_mean", mean_reward),
                                 ("time/fps", fps)):
                 writer.add_scalar(name, value, num_timesteps)
             floor_text = "" if config["task"] == "combat" else f"| floor {mean_floor:5.2f} "
             print(f"steps {num_timesteps:>9,} | train win {win_rate:6.1%} {floor_text}| ep len {mean_length:6.1f} "
-                  f"| entropy {entropy:.3f} | {fps:,.0f} steps/s", flush=True)
+                  f"| reward {mean_reward:6.2f} | entropy {entropy:.3f} | {fps:,.0f} steps/s", flush=True)
 
             if num_timesteps >= next_checkpoint:
                 agent.save(directory / "checkpoints" / f"spireformer_{num_timesteps}_steps.pt", num_timesteps, optimizer)
@@ -262,6 +275,7 @@ def train_entity(config: dict, directory: Path, evaluate, save_evaluation, proje
         best_summary, best_rows = evaluate(config, evaluation["final_episodes"], model=best_agent)
         save_evaluation(directory, "best-results", best_summary, best_rows)
     (directory / "model.json").write_text(json.dumps(model.describe(), indent=2), encoding="utf-8")
-    print(f"\nFinal: {summary['wins']}/{summary['episodes']} wins ({summary['win_rate']:.1%})", flush=True)
+    from sts2_env.training.runner import format_summary
+    print(f"\n{format_summary(summary)}", flush=True)
     print(f"Results and models: {directory}", flush=True)
     return agent

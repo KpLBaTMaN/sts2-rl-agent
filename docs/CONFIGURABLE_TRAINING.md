@@ -17,8 +17,8 @@ training. The PPO rollout size means the actual total can round up slightly.
 Fixed-seed deterministic evaluations use a single attempt by default because
 repeating the identical trajectory would not add evidence.
 An Act 1 attempt succeeds as soon as the Act 1 boss is defeated. Death or the
-episode limit is a failure. Rewards are +1/-1 at the end, with no progression
-bonuses. This trains by repeated attempts, not exhaustive branch search.
+episode limit is a failure. Rewards come from the `shaped` reward profile (see
+[Rewards](#rewards)). This trains by repeated attempts, not exhaustive branch search.
 
 From PowerShell in the project folder:
 
@@ -100,6 +100,41 @@ SpireFormer runs its network on the GPU and steps all `n_envs` games in one
 process, so use more workers and shorter rollouts than the flat model, e.g.
 `n_envs: 16`, `n_steps: 256`, `batch_size: 512`, `n_epochs: 4`.
 
+## Rewards
+
+Reward profiles are JSON files in `local/config/rewards/`, kept next to the
+training presets. Pick one per experiment:
+
+```json
+"reward": "shaped",
+"reward_overrides": {"floor": 0.2}
+```
+
+- `reward`: a profile name from `local/config/rewards/`, a `.json` path, or an
+  inline object of weights. If omitted, `combat` uses `sparse` and
+  `act1`/`full_run` use `shaped`.
+- `reward_overrides`: change single weights for this experiment only.
+
+Supplied profiles:
+
+- `sparse`: +1 win, -1 death or timeout. Identical to training before profiles
+  existed; the original presets are pinned to it so their results stay comparable.
+- `shaped` (default for runs): win +5, death/timeout -1, +0.1 per floor, HP change on
+  the Dota curve (weight 1), +0.3 per elite won, up to +0.05 per combat for enemy HP
+  removed, +0.01 per max HP point, +0.05 per relic.
+- `survival`: like `shaped`, with HP loss weighted twice as heavily.
+
+The design follows OpenAI Five's Dota 2 reward: the objective result is the
+largest term, shaping is paid on *changes* in state so nothing is counted twice,
+and HP uses `(x + 1 - (1-x)^4) / 2` so losing HP when already low costs most.
+Keep total shaping per episode below `win`. `local/config/rewards/README.md`
+lists every key.
+
+The resolved weight table is saved in each experiment's `config.json`.
+Per-term episode totals are logged to TensorBoard under `reward/` (entity model)
+and as `reward_<term>` columns in evaluation CSVs, with averages in
+`average_reward_terms` of the results JSON.
+
 ## Training controls
 
 - `total_timesteps`: new environment decisions to train for, summed across workers.
@@ -158,13 +193,24 @@ name, a UTC timestamp, and a unique suffix. Existing models are not overwritten.
 - `final_model.pt` (entity) or `final_model.zip` (flat): policy at the end of training.
 - `final-results.json` / `final-results-episodes.csv`: final model's results.
 - `best-results.json` / `best-results-episodes.csv`: saved best model's results.
-- `eval_logs/` and `tb_logs/`: evaluation history and TensorBoard logs.
+- `<label>-relic-stats.csv` / `<label>-card-stats.csv` (run tasks): for each
+  relic or card in the final deck, how many runs had it, average copies, and the
+  win rate with and without it. Upgraded cards count as the base card.
+- `eval_logs/` and `tb_logs/`: evaluation history and TensorBoard logs. Entity
+  runs also graph `rollout/gold_mean`, `rollout/deck_size_mean` and `rollout/relics_mean`.
 
-Results include wins/attempts, win rate, distinct seeds, boss reached rate,
+Results include wins, losses and attempts, win rate, distinct seeds, boss reached rate,
 Act 1 win rate once the boss is reached, average HP after wins, average/maximum
-floor, decisions, reward, timeouts and deaths grouped by room type. Timeout counts
+floor, decisions, reward (total and per term), timeouts and deaths grouped by room type. Timeout counts
 are separate from deaths. Fixed-seed deterministic repetitions are correlated;
 do not treat them as independent evidence of performance.
+
+Run tasks (`act1`, `full_run`) also record the end-of-run state of each episode:
+act, gold, max HP, deck size and composition (upgrades, attacks, skills, powers,
+curses/statuses), relics, potions held, card removals, rooms visited by type, and
+the full deck and relic lists (`;`-separated). The summary JSON averages these
+under `averages` and compares gold, deck size, relics, upgrades and floor for
+wins, losses and timeouts under `by_outcome`.
 
 Press Ctrl+C once to save `interrupted_model.zip` and close the workers. A force
 kill or system shutdown may only leave periodic checkpoints.

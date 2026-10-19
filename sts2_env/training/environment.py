@@ -5,10 +5,34 @@ import gymnasium as gym
 import numpy as np
 from stable_baselines3.common.monitor import Monitor
 
-from sts2_env.core.enums import RoomType
+from sts2_env.core.enums import CardType, RoomType
 from sts2_env.core.rng import INT_MAX_EXCLUSIVE
 from sts2_env.gym_env.combat_env import STS2CombatEnv
 from sts2_env.gym_env.run_env import STS2RunEnv
+from sts2_env.training.rewards import RewardTracker, resolve_reward
+
+
+ROOM_COUNTS = {"elites": RoomType.ELITE, "monsters": RoomType.MONSTER, "shops": RoomType.SHOP,
+               "rest_sites": RoomType.REST_SITE, "events": RoomType.EVENT, "treasures": RoomType.TREASURE}
+
+
+def run_snapshot(run_state):
+    """End-of-run state for reports; deck and relic lists are ';'-joined so they fit one CSV cell."""
+    player = run_state.player
+    deck = player.deck
+    rooms = [entry.room_type for entry in run_state.map_point_history]
+    snapshot = dict(act=run_state.current_act_index + 1, gold=player.gold, max_hp=player.max_hp,
+                    deck_size=len(deck), upgraded_cards=sum(card.upgraded for card in deck),
+                    attacks=sum(card.card_type == CardType.ATTACK for card in deck),
+                    skills=sum(card.card_type == CardType.SKILL for card in deck),
+                    powers=sum(card.card_type == CardType.POWER for card in deck),
+                    curses_statuses=sum(card.card_type in (CardType.CURSE, CardType.STATUS) for card in deck),
+                    relic_count=len(player.relics), potions_held=len(player.held_potions()),
+                    card_removals=player.card_shop_removals_used)
+    snapshot.update({name: rooms.count(room) for name, room in ROOM_COUNTS.items()})
+    snapshot.update(relics=";".join(player.relics),
+                    deck=";".join(card.card_id.name + ("+" if card.upgraded else "") for card in deck))
+    return snapshot
 
 
 class ScenarioEnv(gym.Wrapper):
@@ -32,6 +56,7 @@ class ScenarioEnv(gym.Wrapper):
                 raise_simulation_errors=True,
             )
         super().__init__(env)
+        self.rewards = RewardTracker(resolve_reward(config), config["task"])
 
     def _next_seed(self):
         seed_cfg = self.config["seeds"]
@@ -59,9 +84,12 @@ class ScenarioEnv(gym.Wrapper):
         self.boss_reached = False
         self.finished = False
         if self.config["task"] == "combat":
-            return self.env.reset(seed=self.episode_seed, options=options)
-        options = dict(options or {}, run_seed=self.episode_seed)
-        return self.env.reset(seed=seed, options=options)
+            result = self.env.reset(seed=self.episode_seed, options=options)
+        else:
+            options = dict(options or {}, run_seed=self.episode_seed)
+            result = self.env.reset(seed=seed, options=options)
+        self.rewards.reset(self.env)
+        return result
 
     def action_masks(self):
         return self.env.action_masks()
@@ -76,10 +104,9 @@ class ScenarioEnv(gym.Wrapper):
         if not is_combat:
             mgr = self.env._mgr
             self.boss_reached |= mgr._current_room_type == RoomType.BOSS
-        obs, reward, terminated, truncated, info = self.env.step(action)
+        obs, _, terminated, truncated, info = self.env.step(action)
         if self.steps >= self.config["training"]["max_episode_steps"] and not terminated:
             truncated = True
-            reward = -1.0
         if is_combat:
             combat = self.env.combat
             success = bool(terminated and combat.player_won)
@@ -92,7 +119,13 @@ class ScenarioEnv(gym.Wrapper):
             hp = mgr.run_state.player.current_hp
             floor = mgr.run_state.total_floor
             death_room = mgr._current_room_type.name if terminated and not success and mgr._current_room_type else None
+        # The configured reward profile replaces the simulator's sparse reward.
+        reward, _ = self.rewards.step(self.env, terminated, truncated, success)
         self.finished = bool(terminated or truncated)
+        if self.finished:
+            info["reward_terms"] = dict(self.rewards.totals)
+            if not is_combat:
+                info["run_stats"] = run_snapshot(self.env._mgr.run_state)
         info.update(run_seed=self.episode_seed, is_success=success,
                     boss_reached=self.boss_reached, remaining_hp=hp,
                     floor=floor, decisions=self.steps, death_room=death_room,

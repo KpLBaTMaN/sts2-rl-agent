@@ -51,7 +51,9 @@ def evaluate(config, episodes, model=None):
                                      win=info["is_success"], floor=info["floor"],
                                      hp=info["remaining_hp"], decisions=info["decisions"],
                                      boss_reached=info["boss_reached"],
-                                     death_room=info["death_room"], timed_out=info["timed_out"], reward=score))
+                                     death_room=info["death_room"], timed_out=info["timed_out"], reward=score,
+                                     **{f"reward_{term}": value for term, value in info["reward_terms"].items()},
+                                     **info.get("run_stats", {})))
                     break
     finally:
         env.close()
@@ -71,19 +73,75 @@ def evaluate(config, episodes, model=None):
                    max_floor=max(r["floor"] for r in rows),
                    average_decisions=float(np.mean([r["decisions"] for r in rows])),
                    average_reward=float(np.mean([r["reward"] for r in rows])),
-                   timeouts=sum(r["timed_out"] for r in rows), deaths_by_room=deaths)
+                   timeouts=sum(r["timed_out"] for r in rows), deaths_by_room=deaths,
+                   average_reward_terms={key[7:]: float(np.mean([r[key] for r in rows]))
+                                         for key in rows[0] if key.startswith("reward_")})
+    summary["losses"] = episodes - wins - summary["timeouts"]
     if config["task"] == "combat":
         summary["boss_reached_rate"] = None
         summary["boss_conversion_rate"] = None
+    else:
+        summary.update(run_summary(rows))
     return summary, rows
+
+
+RUN_AVERAGES = ("act", "gold", "max_hp", "deck_size", "upgraded_cards", "attacks", "skills", "powers",
+                "curses_statuses", "relic_count", "potions_held", "card_removals",
+                "elites", "monsters", "shops", "rest_sites", "events", "treasures")
+OUTCOME_AVERAGES = ("gold", "deck_size", "relic_count", "upgraded_cards", "floor")
+
+
+def run_summary(rows):
+    """End-of-run averages overall and split by outcome, so wins can be compared with losses."""
+    def mean(group, key):
+        return float(np.mean([r[key] for r in group])) if group else None
+    wins = [r for r in rows if r["win"]]
+    losses = [r for r in rows if not r["win"] and not r["timed_out"]]
+    timeouts = [r for r in rows if r["timed_out"]]
+    return dict(averages={key: mean(rows, key) for key in RUN_AVERAGES},
+                by_outcome={name: {key: mean(group, key) for key in OUTCOME_AVERAGES}
+                            for name, group in (("wins", wins), ("losses", losses), ("timeouts", timeouts))})
+
+
+def item_stats(rows, column):
+    """Per relic or card: how often it ended in the run and the win rate with and without it."""
+    items = [[item.rstrip("+") for item in r[column].split(";") if item] for r in rows]
+    stats = []
+    for item in sorted(set().union(*items)):
+        with_item = [r["win"] for r, held in zip(rows, items) if item in held]
+        without = [r["win"] for r, held in zip(rows, items) if item not in held]
+        stats.append(dict(item=item, runs_with=len(with_item), pick_rate=len(with_item) / len(rows),
+                          avg_copies=sum(held.count(item) for held in items) / len(with_item),
+                          win_rate_with=float(np.mean(with_item)),
+                          win_rate_without=float(np.mean(without)) if without else None))
+    return sorted(stats, key=lambda row: (-row["runs_with"], row["item"]))
+
+
+def write_csv(path, rows):
+    with path.open("w", newline="", encoding="utf-8") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def format_summary(summary):
+    text = (f"Final: {summary['wins']}/{summary['episodes']} wins ({summary['win_rate']:.1%}), "
+            f"{summary['losses']} losses, {summary['timeouts']} timeouts")
+    if "averages" in summary:
+        avg = summary["averages"]
+        text += (f"\n  avg act {avg['act']:.2f} | floor {summary['average_floor']:.2f} | gold {avg['gold']:.0f} "
+                 f"| deck {avg['deck_size']:.1f} ({avg['upgraded_cards']:.1f} upgraded) "
+                 f"| relics {avg['relic_count']:.1f} | elites {avg['elites']:.1f}")
+    return text
 
 
 def save_evaluation(directory, label, summary, rows):
     (directory / f"{label}.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    with (directory / f"{label}-episodes.csv").open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
+    write_csv(directory / f"{label}-episodes.csv", rows)
+    for column, name in (("relics", "relic-stats"), ("deck", "card-stats")):
+        stats = item_stats(rows, column) if column in rows[0] else []
+        if stats:
+            write_csv(directory / f"{label}-{name}.csv", stats)
 
 
 def run(config, config_path):
@@ -106,6 +164,8 @@ def run(config, config_path):
     print(f"Experiment: {directory}", flush=True)
     print(f"Task: {config['task']} | Character: {config['character']} | Seeds: {config['seeds']}", flush=True)
     print(f"Evaluation: {evaluation['mode']} | deterministic={evaluation['deterministic']}", flush=True)
+    weights = {k: v for k, v in config["reward"].items() if k not in ("profile", "description") and v}
+    print(f"Reward: {config['reward']['profile']} {weights}", flush=True)
     if evaluation["mode"] == "training_seeds" and config["seeds"]["mode"] == "fixed":
         print("Fixed-seed deterministic evaluation repeats one trajectory; it does not measure generalisation.", flush=True)
     if evaluation["random_baseline_episodes"]:
@@ -173,7 +233,7 @@ def run(config, config_path):
             best_model = MaskablePPO.load(best, device=train["device"])
             best_summary, best_rows = evaluate(config, evaluation["final_episodes"], best_model)
             save_evaluation(directory, "best-results", best_summary, best_rows)
-        print(f"\nFinal: {summary['wins']}/{summary['episodes']} wins ({summary['win_rate']:.1%})", flush=True)
+        print(f"\n{format_summary(summary)}", flush=True)
         print(f"Results and models: {directory}", flush=True)
         return directory
     finally:

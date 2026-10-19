@@ -6,6 +6,8 @@ import json
 import math
 from pathlib import Path
 
+from sts2_env.training.rewards import resolve_reward
+
 DEFAULTS = {
     "name": "act1-fixed",
     "task": "act1",
@@ -29,6 +31,9 @@ DEFAULTS = {
     "model": {"type": "entity", "d_model": 128, "layers": 3, "heads": 4},
     "output_root": "output/experiments",
     "resume_from": None,
+    # Profile name in local/config/rewards, a .json path, or an object; None picks by task.
+    "reward": None,
+    "reward_overrides": None,
 }
 
 
@@ -117,4 +122,7 @@ def load_config(path: str | Path) -> dict:
         raise ValueError("output_root must be a directory path")
     if config["resume_from"] is not None and not isinstance(config["resume_from"], str):
         raise ValueError("resume_from must be a saved model path or null")
+    # Saved experiment configs record the full resolved weight table.
+    config["reward"] = resolve_reward(config)
+    config["reward_overrides"] = None
     return config

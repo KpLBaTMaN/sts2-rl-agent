@@ -126,7 +126,9 @@ def test_timeout_is_failure_and_requires_reset():
     env.reset()
     action = int(np.flatnonzero(env.action_masks())[0])
     _, reward, _, truncated, info = env.step(action)
-    assert truncated and reward == -1 and not info["is_success"]
+    assert truncated and not info["is_success"]
+    # Shaping may add progress terms; the timeout result itself is still -1.
+    assert info["reward_terms"]["result"] == -1 and reward == sum(info["reward_terms"].values())
     with pytest.raises(RuntimeError, match="reset"):
         env.step(action)
 
@@ -143,3 +145,57 @@ def test_bad_config_fails_before_training(tmp_path, override, match):
     path.write_text(json.dumps(override))
     with pytest.raises(ValueError, match=match):
         load_config(path)
+
+
+def test_finished_run_reports_end_of_run_state():
+    cfg = config()
+    cfg["task"] = "act1"
+    env = ScenarioEnv(cfg)
+    env.reset()
+    while True:
+        action = int(np.flatnonzero(env.action_masks())[0])
+        _, _, terminated, truncated, info = env.step(action)
+        if terminated or truncated:
+            break
+    stats = info["run_stats"]
+    player = env.env._mgr.run_state.player
+    assert stats["gold"] == player.gold and stats["deck_size"] == len(player.deck)
+    assert stats["relics"].split(";") == player.relics and stats["relic_count"] == len(player.relics)
+    assert len(stats["deck"].split(";")) == stats["deck_size"]
+    assert stats["attacks"] + stats["skills"] + stats["powers"] + stats["curses_statuses"] <= stats["deck_size"]
+
+
+def test_combat_task_has_no_run_snapshot():
+    cfg = config()
+    cfg["task"] = "combat"
+    cfg["training"]["max_episode_steps"] = 1
+    env = ScenarioEnv(cfg)
+    env.reset()
+    _, _, _, _, info = env.step(int(np.flatnonzero(env.action_masks())[0]))
+    assert "run_stats" not in info
+
+
+def test_reports_split_outcomes_and_rank_relics_and_cards(tmp_path):
+    from sts2_env.training.runner import format_summary, run_summary, save_evaluation
+
+    def row(win, gold, relics, deck, timed_out=False):
+        return dict(win=win, timed_out=timed_out, floor=5, gold=gold, deck_size=len(deck.split(";")),
+                    relic_count=len(relics.split(";")), upgraded_cards=deck.count("+"), relics=relics, deck=deck)
+
+    rows = [row(True, 100, "BURNING_BLOOD;ANCHOR", "BASH+;STRIKE;STRIKE"),
+            row(False, 50, "BURNING_BLOOD", "BASH;STRIKE"),
+            row(False, 10, "BURNING_BLOOD", "BASH", timed_out=True)]
+    outcome = run_summary([dict(r, **{k: 1 for k in ("act", "max_hp", "attacks", "skills", "powers",
+                                                     "curses_statuses", "potions_held", "card_removals",
+                                                     "elites", "monsters", "shops", "rest_sites",
+                                                     "events", "treasures")}) for r in rows])["by_outcome"]
+    assert outcome["wins"]["gold"] == 100 and outcome["losses"]["gold"] == 50 and outcome["timeouts"]["gold"] == 10
+
+    save_evaluation(tmp_path, "final-results", {"wins": 1}, rows)
+    relics = (tmp_path / "final-results-relic-stats.csv").read_text(encoding="utf-8").splitlines()
+    assert relics[1].startswith("BURNING_BLOOD,3,") and relics[2] == "ANCHOR,1,0.3333333333333333,1.0,1.0,0.0"
+    cards = (tmp_path / "final-results-card-stats.csv").read_text(encoding="utf-8").splitlines()
+    # Upgrades count as the same card; STRIKE appears twice in the winning deck.
+    assert cards[1].startswith("BASH,3,") and cards[2].startswith("STRIKE,2,") and ",1.5," in cards[2]
+    text = format_summary({"wins": 1, "episodes": 3, "win_rate": 1 / 3, "losses": 1, "timeouts": 1})
+    assert text == "Final: 1/3 wins (33.3%), 1 losses, 1 timeouts"
