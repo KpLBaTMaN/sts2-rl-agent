@@ -24,7 +24,50 @@ steps, batch 512, 4 epochs, lr 3e-4, entropy 0.02, gamma 0.995, SpireFormer
 the variable named in each file changes. Validation uses the same 50 seeds as
 before (10000–10049), every 250K decisions, with checkpoints every 100K.
 
-## Stage 1: screen (5 × 0.5M decisions, model seed 42)
+## Running the stages as a queue
+
+Each `queue-*.json` file lists presets to train one after another. The queue
+runs each preset as its own process, waits for its final and best evaluations,
+then starts the next. It refuses a second launch on the same queue, and a crash
+or reboot can be resumed without redoing finished runs.
+
+| Plan | Runs | Rough time (RTX 4090) |
+|---|---|---|
+| `queue-stage1.json` | The six Stage 1 arms below | about 3.5 hours |
+| `queue-stage2-baseline.json` | Shaped replicates s42/s43/s44, then the gamma 0.998 run | about 7 hours |
+
+Neither needs a decision first. Only the Stage 2 candidate does: it is chosen
+from Stage 1 results by the rules below, then queued separately.
+
+On the server, from the repository root, with the project's Python environment
+active (on Windows use `.venv\Scripts\python.exe` for `python`):
+
+```bash
+python -m sts2_env.training.comparison --prepare --root output/ablation/stage1 --plan local/config/presets/reward-ablation/queue-stage1.json
+python -m sts2_env.training.comparison --prepare --root output/ablation/stage2-baseline --plan local/config/presets/reward-ablation/queue-stage2-baseline.json
+nohup sh -c 'python -m sts2_env.training.comparison --root output/ablation/stage1 && python -m sts2_env.training.comparison --root output/ablation/stage2-baseline' > output/ablation/queue.log 2>&1 &
+```
+
+`--prepare` freezes each preset, with its exact reward weights, into
+`<root>/configs/`; later edits to the preset files do not change a prepared
+queue. Run directories go to `<root>/runs/`. Each run logs to `<root>/<name>.log`,
+queue state is in `<root>/batch.json`, and `<root>/comparison.csv` adds a row as
+each run finishes (best-checkpoint test results, upgrades and turns per combat).
+
+- **Check the pipeline first** (seconds per run): prepare a separate root with
+  `--smoke` added, and run it.
+- **Pause after the current run:** write `{"pause_after_current": true}` to
+  `<root>/queue-control.json`; set it back to `false` to continue.
+- **Resume after a failure, crash or reboot:** if the queue process is gone, delete
+  `<root>/queue.lock`, then run the same command with `--resume`. Completed runs are
+  kept; the interrupted run starts again from scratch and its partial directory is
+  recorded under `abandoned` in `batch.json`.
+
+The training dashboard (`docs/TRAINING_DASHBOARD.md`) reads the same queue
+files, but its labels and colours only know the sparse, shaped and survival
+profiles, so these runs show up unlabelled there.
+
+## Stage 1: screen (6 × 0.5M decisions, model seed 42)
 
 | File | HP weight | Upgrade reward | Question |
 |---|---:|---:|---|
@@ -33,15 +76,18 @@ before (10000–10049), every 250K decisions, with checkpoints every 100K.
 | `1-screen-half-hp.json` | 0.5 | 0 | Does lower healing pressure alone help? |
 | `1-screen-deckbuilder.json` | 0.5 | 0.10 | Both (same weights as `deckbuilder.json`) |
 | `1-screen-sparse.json` | — | — | Control: best holdout wins so far (12/200) |
+| `1-screen-turn-cost.json` | 1.0 | 0 | Does a cost per extra combat turn help? |
+
+The turn-cost arm is the baseline with `combat_turn: -0.005` (see
+`local/config/rewards/README.md`): it asks whether faster fights win more. Judge
+it on wins and HP lost as well as `averages.turns_per_combat`; shorter fights
+that cost more HP are not an improvement. A shaped screen trained before this
+term existed has no turns-per-combat figure; rerun it to compare tempo.
 
 The final test is the 200 development seeds (20000–20199), so results line up
 seed-for-seed with the old checkpoints: sparse best 12/200, shaped best 10/200,
 boss reach 39/200 and 64/200. Only the baseline arm runs the 50-episode random
 baseline; it is identical for every arm.
-
-```powershell
-Get-ChildItem local/config/presets/reward-ablation/1-screen-*.json | ForEach-Object { .\.venv\Scripts\python.exe -m sts2_env.training.runner --config $_.FullName }
-```
 
 **Decide before looking at results:**
 
@@ -78,7 +124,7 @@ choices need a longer horizon. Compare it with that run only.
 Based on the local 1M-step shaped run (43 minutes) and 100-episode CPU
 evaluations (about 3 minutes):
 
-- Stage 1: about 35 minutes per arm, about 3 hours in total.
+- Stage 1: about 35 minutes per arm, about 3.5 hours for the six arms.
 - Stage 2: about 1 hour 40 minutes per run, because the 1,000-episode final and
   best evaluations take about 30 minutes each. That is about 5 hours per arm.
 

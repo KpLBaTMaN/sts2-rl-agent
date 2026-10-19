@@ -28,7 +28,7 @@ const metrics = {
   runs_per_hour:['Game runs per hour','Completed training attempts divided by elapsed hours at each rollout, including evaluation and update overhead.','number']
 };
 for(const [key,title] of Object.entries({gold:'Gold',max_hp:'Maximum HP',deck_size:'Deck size',upgraded_cards:'Upgraded cards',relic_count:'Relics',potions_held:'Potions held',card_removals:'Shop card removals',elites:'Elite rooms visited',monsters:'Monster rooms visited',shops:'Shops visited',rest_sites:'Rest sites visited',events:'Events visited',treasures:'Treasures visited',attacks:'Attack cards',skills:'Skill cards',powers:'Power cards',curses_statuses:'Curses / statuses'})) metrics['run_averages.'+key]=[title,'End-of-episode average over the last 200 completed training runs.','number'];
-for(const key of ['win','death','timeout','floor','hp','elite','enemy_damage','max_hp','relic','gold','upgrade']) metrics['reward_terms.'+key]=['Reward contribution · '+key,'Average per-episode contribution from this reward term, last 200 episodes. Profile scales differ.','number'];
+for(const key of ['win','death','timeout','floor','hp','elite','enemy_damage','max_hp','relic','gold','upgrade','combat_turn']) metrics['reward_terms.'+key]=['Reward contribution · '+key,'Average per-episode contribution from this reward term, last 200 episodes. Profile scales differ.','number'];
 $('metric').innerHTML=Object.entries(metrics).map(([key,[title]])=>`<option value="${key}">${title}</option>`).join('');
 
 function duration(seconds){
@@ -101,7 +101,7 @@ function render(){
 
 function renderVariables(){
   if(!state)return;
-  const runs=state.runs,terms={win:'Once the Act 1 boss is defeated',death:'Once on death',timeout:'Once on decision limit',floor:'Per new floor reached',hp:'Change in curved HP fraction',elite:'Per elite victory',enemy_damage:'Fraction of enemy HP removed per combat',max_hp:'Per maximum HP point changed',relic:'Per relic gained',gold:'Per gold gained',upgrade:'Per completed permanent upgrade, once per card',hp_curve:'HP reward function'};
+  const runs=state.runs,terms={win:'Once the Act 1 boss is defeated',death:'Once on death',timeout:'Once on decision limit',floor:'Per new floor reached',hp:'Change in curved HP fraction',elite:'Per elite victory',enemy_damage:'Fraction of enemy HP removed per combat',max_hp:'Per maximum HP point changed',relic:'Per relic gained',gold:'Per gold gained',upgrade:'Per completed permanent upgrade, once per card',combat_turn:'Per combat turn after the first',hp_curve:'HP reward function'};
   $('weights-body').innerHTML=Object.entries(terms).map(([key,note])=>`<tr><td>${esc(key)}</td>${runs.map(r=>`<td class="${r.profile}-text">${esc(r.config.reward[key] ?? 0)}</td>`).join('')}<td>${note}</td></tr>`).join('');
   const run=runs.find(r=>r.profile===$('config-run').value),query=$('search-config').value.toLowerCase();
   const key=run.profile+'|'+query;if(key===lastConfigKey)return;lastConfigKey=key;

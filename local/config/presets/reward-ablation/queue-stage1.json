@@ -1,0 +1,11 @@
+{
+  "title": "Reward ablation · Stage 1 screen (6 arms × 0.5M decisions)",
+  "runs": [
+    "1-screen-shaped.json",
+    "1-screen-upgrade.json",
+    "1-screen-half-hp.json",
+    "1-screen-deckbuilder.json",
+    "1-screen-sparse.json",
+    "1-screen-turn-cost.json"
+  ]
+}

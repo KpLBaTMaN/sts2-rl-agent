@@ -112,7 +112,7 @@ def _fake_run(room, combat, hp=50, floor=3, relics=1, gold=99):
 def test_elite_win_enemy_damage_and_relic_terms():
     weights = resolve_reward(config(reward="shaped"))
     enemy = SimpleNamespace(current_hp=40, max_hp=40)
-    combat = SimpleNamespace(enemies=[enemy], is_over=False, player_won=False,
+    combat = SimpleNamespace(enemies=[enemy], is_over=False, player_won=False, turn_count=1,
                              player=SimpleNamespace(current_hp=50, max_hp=80))
     tracker = RewardTracker(weights, "act1")
     tracker.reset(_fake_run(RoomType.ELITE, combat))
@@ -132,7 +132,7 @@ def test_elite_win_enemy_damage_and_relic_terms():
 def test_reviving_enemy_cannot_be_farmed_for_damage_reward():
     weights = resolve_reward(config(reward="shaped"))
     eye = SimpleNamespace(current_hp=6, max_hp=6)
-    combat = SimpleNamespace(enemies=[eye], is_over=False, player_won=False,
+    combat = SimpleNamespace(enemies=[eye], is_over=False, player_won=False, turn_count=1,
                              player=SimpleNamespace(current_hp=50, max_hp=80))
     tracker = RewardTracker(weights, "act1")
     tracker.reset(_fake_run(RoomType.MONSTER, combat))
@@ -184,7 +184,7 @@ def test_deckbuilder_heal_and_upgrade_tradeoff():
 def test_temporary_combat_upgrade_earns_no_permanent_deck_reward():
     permanent = SimpleNamespace(upgraded=False)
     temporary = SimpleNamespace(upgraded=False)
-    combat = SimpleNamespace(enemies=[], is_over=False, player_won=False,
+    combat = SimpleNamespace(enemies=[], is_over=False, player_won=False, turn_count=1,
                              player=SimpleNamespace(current_hp=50, max_hp=80),
                              hand=[temporary])
     env = _fake_run(RoomType.MONSTER, combat)
@@ -210,5 +210,44 @@ def test_real_smith_choice_pays_after_card_selection():
         assert reward == pytest.approx(0.1)
         assert env.rewards.totals["upgrade"] == pytest.approx(0.1)
         assert sum(c.upgraded for c in mgr.run_state.player.deck) == 1
+    finally:
+        env.close()
+
+
+def test_combat_turn_costs_each_turn_after_the_first():
+    weights = resolve_reward(config(reward="shaped", reward_overrides={"combat_turn": -0.005}))
+    assert resolve_reward(config(reward="shaped"))["combat_turn"] == 0
+    first = SimpleNamespace(enemies=[], is_over=False, player_won=False, turn_count=1,
+                            player=SimpleNamespace(current_hp=50, max_hp=80))
+    tracker = RewardTracker(weights, "act1")
+    tracker.reset(_fake_run(RoomType.MONSTER, first))
+    # Card plays within a turn are free; only a new turn costs.
+    _, terms = tracker.step(_fake_run(RoomType.MONSTER, first), False, False, False)
+    assert terms["combat_turn"] == 0
+    first.turn_count = 3
+    _, terms = tracker.step(_fake_run(RoomType.MONSTER, first), False, False, False)
+    assert terms["combat_turn"] == pytest.approx(-0.01)
+    # A new combat's opening turn is free.
+    second = SimpleNamespace(**dict(vars(first), turn_count=1))
+    _, terms = tracker.step(_fake_run(RoomType.MONSTER, second), False, False, False)
+    assert terms["combat_turn"] == 0
+    assert (tracker.combats, tracker.combat_turns) == (2, 4)
+
+
+def test_real_run_charges_turns_beyond_each_combats_first():
+    from sts2_env.training.runner import run_summary
+    env = ScenarioEnv(config(task="act1", reward="shaped", reward_overrides={"combat_turn": -0.005}))
+    try:
+        env.reset()
+        while True:
+            action = int(np.flatnonzero(env.action_masks())[0])
+            _, _, terminated, truncated, info = env.step(action)
+            if terminated or truncated:
+                break
+        stats = info["run_stats"]
+        assert stats["combats"] >= 1 and stats["combat_turns"] >= stats["combats"]
+        assert info["reward_terms"]["combat_turn"] == pytest.approx(-0.005 * (stats["combat_turns"] - stats["combats"]))
+        row = dict(stats, win=False, timed_out=False, floor=info["floor"])
+        assert run_summary([row])["averages"]["turns_per_combat"] == stats["combat_turns"] / stats["combats"]
     finally:
         env.close()

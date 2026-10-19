@@ -77,7 +77,7 @@ def test_final_holdout_is_reserved_and_does_not_change_periodic_config(tmp_path)
 def test_partial_telemetry_append_does_not_break_snapshot(tmp_path):
     root = tmp_path / "batch"
     manifest = prepare(root, smoke=True)
-    directory = root / "runs" / (manifest["runs"][0]["name"] + "-test")
+    directory = root / "runs" / (manifest["runs"][0]["name"] + "-20261019-000000-abcdef")
     directory.mkdir(parents=True)
     publish(directory, "rollout", steps=32, train_win_rate=0.5)
     with (directory / "metrics.jsonl").open("a") as stream:

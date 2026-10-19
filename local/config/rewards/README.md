@@ -18,8 +18,29 @@ If `reward` is omitted: `combat` uses `sparse`, `act1`/`full_run` use `shaped`.
 | `relic` | A relic is gained | per relic |
 | `gold` | Gold is gained | per gold |
 | `upgrade` | An existing permanent deck card becomes upgraded | once per card instance per episode |
+| `combat_turn` | A new player turn starts in a combat, after the first; use a negative value | per turn |
 
 Keep total shaping over an episode below `win`, so climbing floors never pays more than winning.
+
+## Combat tempo experiment
+
+`combat_turn` is a small cost for each extra turn a fight takes. It targets
+fights the policy drags out: blocking when it could have killed a low-HP enemy,
+or blocking far more than the enemies intend to deal. It is counted per turn,
+not per decision, because a per-decision cost would also charge for playing
+cards and push the policy to end turns with energy unspent.
+
+At `-0.005`, one extra turn costs about as much as losing 1 HP at full health
+(about 0.5 HP at half health), so a setup turn (a power, a scaling card) still
+pays when it saves more HP than that over the fight. At an estimated 50 extra
+turns per Act 1 run (`turns_per_combat` will give the real figure) that is about
+-0.25 in total, against +0.1 per floor and +5 for winning.
+Whether those turns are worth taking is still learned from HP and the result.
+
+Every Act 1 and full-run evaluation now reports `averages.turns_per_combat` (and `combats` and
+`combat_turns` per episode) for every profile, so arms can be compared on tempo
+even when `combat_turn` is 0. The screen arm is
+`local/config/presets/reward-ablation/1-screen-turn-cost.json`.
 
 ## Deckbuilder experiment
 

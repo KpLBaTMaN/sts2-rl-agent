@@ -70,8 +70,13 @@ CSVs, TensorBoard events, `metrics.jsonl`, and an atomic `live.json` snapshot.
 `comparison.csv` and `comparison.json` summarise completed test results;
 `batch.json` records queue state, exit codes, and process IDs. A failed or
 interrupted trainer stops the queue. Duplicate queue launches are refused.
-Resume of a failed experiment requires deliberately preparing a continuation;
-the dashboard never silently repeats or overwrites work.
+To continue a stopped queue, run it again with `--resume`: completed runs are
+kept and the interrupted run starts again from scratch. The dashboard never
+silently repeats or overwrites work.
+
+`--prepare --plan <file>` queues any list of preset files instead of the three
+profiles; `local/config/presets/reward-ablation/README.md` shows the reward
+ablation queues. The dashboard's labels only cover the three profiles.
 
 For a short end-to-end diagnostic, add `--smoke` when preparing a separate queue.
 It uses the same model on CUDA but tiny rollouts and episode limits. Its results

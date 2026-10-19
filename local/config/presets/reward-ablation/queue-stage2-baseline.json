@@ -1,0 +1,9 @@
+{
+  "title": "Reward ablation · Stage 2 shaped replicates and Stage 3 horizon (4 × 1M decisions)",
+  "runs": [
+    "2-replicate-shaped-s42.json",
+    "2-replicate-shaped-s43.json",
+    "2-replicate-shaped-s44.json",
+    "3-horizon-shaped-gamma998.json"
+  ]
+}

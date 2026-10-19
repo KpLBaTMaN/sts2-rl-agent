@@ -115,7 +115,12 @@ def run_summary(rows):
     losses = [r for r in rows if not r["win"] and not r["timed_out"] and not r.get("stalled")]
     timeouts = [r for r in rows if r["timed_out"]]
     stalls = [r for r in rows if r.get("stalled")]
-    return dict(averages={key: mean(rows, key) for key in RUN_AVERAGES},
+    averages = {key: mean(rows, key) for key in RUN_AVERAGES}
+    # Rows saved before combat tempo was tracked have no combat counts.
+    fought = [r for r in rows if r.get("combats")]
+    averages["turns_per_combat"] = (sum(r["combat_turns"] for r in fought) / sum(r["combats"] for r in fought)
+                                    if fought else None)
+    return dict(averages=averages,
                 by_outcome={name: {key: mean(group, key) for key in OUTCOME_AVERAGES}
                             for name, group in (("wins", wins), ("losses", losses), ("timeouts", timeouts),
                                                 ("stalls", stalls))})
@@ -154,6 +159,8 @@ def format_summary(summary):
         text += (f"\n  avg act {avg['act']:.2f} | floor {summary['average_floor']:.2f} | gold {avg['gold']:.0f} "
                  f"| deck {avg['deck_size']:.1f} ({avg['upgraded_cards']:.1f} upgraded) "
                  f"| relics {avg['relic_count']:.1f} | elites {avg['elites']:.1f}")
+        if avg.get("turns_per_combat") is not None:
+            text += f" | {avg['turns_per_combat']:.2f} turns/combat"
     return text
 
 

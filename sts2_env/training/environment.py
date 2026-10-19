@@ -194,7 +194,8 @@ class ScenarioEnv(gym.Wrapper):
         if self.finished:
             info["reward_terms"] = dict(self.rewards.totals)
             if not is_combat:
-                info["run_stats"] = run_snapshot(self.env._mgr.run_state)
+                info["run_stats"] = dict(run_snapshot(self.env._mgr.run_state), combats=self.rewards.combats,
+                                         combat_turns=self.rewards.combat_turns)
             # A loop's own trace explains it; otherwise the last decisions explain a timeout.
             loop = self.loop
             info["loop"] = None if loop is None else {k: v for k, v in loop.items() if k != "trace"}

@@ -20,7 +20,7 @@ REWARDS_DIR = PROJECT_ROOT / "local" / "config" / "rewards"
 
 # Every term defaults to zero, so a profile only lists what it pays for.
 WEIGHT_KEYS = ("win", "death", "timeout", "floor", "hp", "elite",
-               "enemy_damage", "max_hp", "relic", "gold", "upgrade")
+               "enemy_damage", "max_hp", "relic", "gold", "upgrade", "combat_turn")
 TERMS = WEIGHT_KEYS[3:]
 TEXT_KEYS = ("profile", "description")
 HP_CURVES = ("dota", "linear")
@@ -126,7 +126,16 @@ class RewardTracker:
         self._enemy_total = 0.0
         self._known_enemies: dict[int, list] = {}  # id -> [creature, credited damage]
         self._credited_upgrades: dict[int, object] = {}
+        # Combat tempo is counted for every profile, so arms can be compared on it.
+        self.combats = 0
+        self.combat_turns = 0
         self._before = self._snapshot(env) if env is not None else None
+        if self._before is not None and self._before["combat"] is not None:
+            self._count_combat(self._before)
+
+    def _count_combat(self, snapshot) -> None:
+        self.combats += 1
+        self.combat_turns += snapshot["turn"]
 
     # ---- state access -------------------------------------------------
 
@@ -153,6 +162,7 @@ class RewardTracker:
             enemies = {id(e): (e, max(e.current_hp, 0)) for e in combat.enemies}
         return dict(hp=player.current_hp, max_hp=player.max_hp, floor=floor, relics=relics, gold=gold,
                     room=room, combat=combat, combat_over=combat.is_over if combat is not None else True,
+                    turn=combat.turn_count if combat is not None else 0,
                     enemies=enemies, deck={id(c): (c, bool(c.upgraded)) for c in deck})
 
     # ---- reward -------------------------------------------------------
@@ -199,6 +209,15 @@ class RewardTracker:
             if (before["room"] == RoomType.ELITE and not before["combat_over"]
                     and combat.is_over and combat.player_won):
                 terms["elite"] = w["elite"]
+
+        # Every player turn after a combat's first costs `combat_turn`: a first-turn kill costs nothing.
+        current = after["combat"]
+        if current is not None and current is combat:
+            new_turns = max(after["turn"] - before["turn"], 0)
+            self.combat_turns += new_turns
+            terms["combat_turn"] = w["combat_turn"] * new_turns
+        elif current is not None:
+            self._count_combat(after)
 
         result = 0.0
         if terminated:
