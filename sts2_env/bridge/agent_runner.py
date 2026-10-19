@@ -114,6 +114,7 @@ def run_agent(
     verbose: bool = False,
     record_replay_path: str | None = None,
     replay_factory: str | None = None,
+    exit_on_disconnect: bool = False,
 ) -> None:
     """Main agent loop.
 
@@ -162,10 +163,16 @@ def run_agent(
                     if client.ping():
                         continue
                     else:
+                        if exit_on_disconnect:
+                            logger.info("Game disconnected. Stopping agent.")
+                            break
                         logger.error("Lost connection. Attempting reconnect...")
                         _reconnect_with_retry(client)
                         continue
                 except ConnectionError:
+                    if exit_on_disconnect:
+                        logger.info("Game disconnected. Stopping agent.")
+                        break
                     logger.error("Connection lost. Attempting reconnect...")
                     _reconnect_with_retry(client)
                     continue
@@ -698,6 +705,8 @@ def main() -> None:
         help="Optional module:function factory to store in replay metadata for later comparison.",
     )
 
+    parser.add_argument("--exit-on-disconnect", action="store_true",
+                        help="Stop the agent when the game closes.")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -716,6 +725,7 @@ def main() -> None:
         verbose=args.verbose,
         record_replay_path=args.record_replay,
         replay_factory=args.replay_factory,
+        exit_on_disconnect=args.exit_on_disconnect,
     )
 
 

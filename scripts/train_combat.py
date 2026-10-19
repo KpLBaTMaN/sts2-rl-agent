@@ -36,13 +36,17 @@ def train(args):
         from sb3_contrib.common.wrappers import ActionMasker
         from sb3_contrib.common.maskable.utils import get_action_masks
         from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
-        from stable_baselines3.common.callbacks import EvalCallback
+        from stable_baselines3.common.monitor import Monitor
+        from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
+        import torch
     except ImportError:
         print("Training requires sb3-contrib and stable-baselines3.")
         print("Install with: pip install 'sts2-rl-agent[train]'")
         sys.exit(1)
 
     from sts2_env.gym_env.combat_env import STS2CombatEnv
+
+    torch.set_num_threads(args.torch_threads)
 
     print(f"Training MaskablePPO on STS2 combat")
     print(f"  n_envs:          {args.n_envs}")
@@ -62,8 +66,8 @@ def train(args):
     def make_masked_env(seed: int):
         def _init():
             env = STS2CombatEnv()
-            env = ActionMasker(env, mask_fn)
-            return env
+            env.reset(seed=seed)
+            return Monitor(env)
         return _init
 
     # Create vectorized envs
@@ -89,10 +93,12 @@ def train(args):
         ent_coef=args.ent_coef,
         verbose=1,
         tensorboard_log=str(output_dir / "tb_logs"),
+        device=args.device,
+        seed=args.seed,
     )
 
     # Eval callback
-    eval_callback = EvalCallback(
+    eval_callback = MaskableEvalCallback(
         eval_env,
         best_model_save_path=str(output_dir / "best_model"),
         log_path=str(output_dir / "eval_logs"),
@@ -158,6 +164,9 @@ def evaluate(model, n_episodes: int = 100):
 
 def main():
     parser = argparse.ArgumentParser(description="Train MaskablePPO on STS2 combat")
+    parser.add_argument("--device", default="cpu", help="PyTorch device (cpu or cuda)")
+    parser.add_argument("--torch-threads", type=int, default=4)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--total-timesteps", type=int, default=500_000,
                         help="Total training timesteps (default: 500000)")
     parser.add_argument("--n-envs", type=int, default=4,
