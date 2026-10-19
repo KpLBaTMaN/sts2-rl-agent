@@ -33,6 +33,7 @@ from sts2_env.core.enums import (
     TargetType,
 )
 from sts2_env.core.rng import INT_MAX, Rng
+from sts2_env.core.selection import PendingCardChoice
 from sts2_env.map.map_point import MapCoord
 from sts2_env.core.constants import PERCENT_DENOMINATOR
 from sts2_env.potions.all import (
@@ -320,6 +321,19 @@ class RunManager:
     @property
     def current_room(self) -> Room | None:
         return self._current_room
+
+    @property
+    def active_card_choice(self) -> PendingCardChoice | None:
+        """The card selection waiting for the player, from combat, an event or the deck."""
+        if self._run_state.is_over:
+            return None
+        if self._phase == self.PHASE_COMBAT:
+            return self._combat.pending_choice if self._combat is not None and not self._combat.is_over else None
+        if self._run_state.pending_choice is not None:
+            return self._run_state.pending_choice
+        if self._phase == self.PHASE_EVENT and self._event_model is not None:
+            return self._event_model.pending_choice
+        return None
 
     # ------------------------------------------------------------------
     # Step-based API
@@ -867,22 +881,7 @@ class RunManager:
         choice = self._run_state.pending_choice
         if choice is None:
             return []
-        actions: list[dict] = []
-        if choice.can_confirm():
-            actions.append({
-                "action": "confirm_choice",
-                "prompt": choice.prompt,
-                "selected_count": len(choice.selected_indices),
-            })
-        for i, option in enumerate(choice.options):
-            actions.append({
-                "action": "choose",
-                "index": i,
-                "card_id": option.card.card_id.name,
-                "source_pile": option.source_pile,
-                "selected": i in choice.selected_indices,
-            })
-        return actions
+        return choice.choice_actions()
 
     def _actions_combat(self) -> list[dict]:
         actions: list[dict] = []
@@ -891,23 +890,7 @@ class RunManager:
             return actions
 
         if combat.pending_choice is not None:
-            if combat.pending_choice.can_confirm():
-                actions.append({
-                    "action": "confirm_choice",
-                    "prompt": combat.pending_choice.prompt,
-                    "selected_count": len(combat.pending_choice.selected_indices),
-                })
-            for i, option in enumerate(combat.pending_choice.options):
-                actions.append({
-                    "action": "choose",
-                    "index": i,
-                    "card_id": option.card.card_id.name,
-                    "cost": option.card.cost,
-                    "source_pile": option.source_pile,
-                    "prompt": combat.pending_choice.prompt,
-                    "selected": i in combat.pending_choice.selected_indices,
-                })
-            return actions
+            return combat.pending_choice.choice_actions()
 
         actions.append({"action": "end_turn"})
 
@@ -1150,23 +1133,7 @@ class RunManager:
 
     def _actions_event(self) -> list[dict]:
         if self._event_model is not None and self._event_model.pending_choice is not None:
-            choice = self._event_model.pending_choice
-            actions: list[dict] = []
-            if choice.can_confirm():
-                actions.append({
-                    "action": "confirm_choice",
-                    "prompt": choice.prompt,
-                    "selected_count": len(choice.selected_indices),
-                })
-            for i, option in enumerate(choice.options):
-                actions.append({
-                    "action": "choose",
-                    "index": i,
-                    "card_id": option.card.card_id.name,
-                    "source_pile": option.source_pile,
-                    "selected": i in choice.selected_indices,
-                })
-            return actions
+            return self._event_model.pending_choice.choice_actions()
         if not self._event_options:
             return [{"action": "event_choice", "option_id": "leave", "label": "Leave"}]
         return [

@@ -7,6 +7,7 @@ import numpy as np
 from sts2_env.core.combat import CombatState
 from sts2_env.core.creature import Creature
 from sts2_env.core.enums import PotionTargetType, TargetType
+from sts2_env.core.selection import PendingCardChoice
 from sts2_env.core.constants import (
     ACTION_END_TURN,
     ACTION_SPACE_SIZE,
@@ -57,6 +58,19 @@ def action_to_potion_and_target(action: int) -> tuple[int | None, int | None]:
     return slot_idx, target_offset - 1
 
 
+def fill_choice_mask(choice: PendingCardChoice, mask: np.ndarray) -> None:
+    """Confirm at action 0, option i at action 1 + i.
+
+    Selected cards are never offered again: a policy that could deselect can
+    toggle one card forever, and adding cards only reaches every final set.
+    """
+    if choice.can_confirm():
+        mask[ACTION_END_TURN] = 1
+    for i in range(min(choice.num_options, ACTION_SPACE_SIZE - 1)):
+        if not choice.is_multi or choice.can_select(i):
+            mask[1 + i] = 1
+
+
 def get_action_mask(combat: CombatState, owner: Creature | None = None) -> np.ndarray:
     """Return boolean mask of valid actions."""
     mask = np.zeros(ACTION_SPACE_SIZE, dtype=np.int8)
@@ -68,14 +82,7 @@ def get_action_mask(combat: CombatState, owner: Creature | None = None) -> np.nd
         return mask
 
     if combat.pending_choice is not None:
-        if combat.pending_choice.can_confirm():
-            mask[ACTION_END_TURN] = 1
-        for i in range(min(combat.pending_choice.num_options, ACTION_SPACE_SIZE - 1)):
-            if combat.pending_choice.is_multi:
-                if combat.pending_choice.can_toggle(i):
-                    mask[1 + i] = 1
-            else:
-                mask[1 + i] = 1
+        fill_choice_mask(combat.pending_choice, mask)
         return mask
 
     # Can always end turn

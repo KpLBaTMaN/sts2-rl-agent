@@ -193,6 +193,9 @@ name, a UTC timestamp, and a unique suffix. Existing models are not overwritten.
 - `final_model.pt` (entity) or `final_model.zip` (flat): policy at the end of training.
 - `final-results.json` / `final-results-episodes.csv`: final model's results.
 - `best-results.json` / `best-results-episodes.csv`: saved best model's results.
+- `<label>-traces.jsonl`: for each stalled, timed-out or looping episode, the
+  decisions that explain it (state fingerprint, action, card-selection prompt,
+  limits, selected indexes before and after, and whether anything changed).
 - `<label>-relic-stats.csv` / `<label>-card-stats.csv` (run tasks): for each
   relic or card in the final deck, how many runs had it, average copies, and the
   win rate with and without it. Upgraded cards count as the base card.
@@ -201,16 +204,31 @@ name, a UTC timestamp, and a unique suffix. Existing models are not overwritten.
 
 Results include wins, losses and attempts, win rate, distinct seeds, boss reached rate,
 Act 1 win rate once the boss is reached, average HP after wins, average/maximum
-floor, decisions, reward (total and per term), timeouts and deaths grouped by room type. Timeout counts
-are separate from deaths. Fixed-seed deterministic repetitions are correlated;
+floor, decisions, reward (total and per term), timeouts, stalls and deaths grouped by room type.
+Timeouts, stalls and deaths are counted separately. Fixed-seed deterministic repetitions are correlated;
 do not treat them as independent evidence of performance.
+
+A **stall** is a deterministic evaluation that repeats the same state and action,
+or the same cycle of up to four, three times in a row. The policy would repeat it
+until the decision limit, so the attempt stops there and scores as a timeout in
+the reward. `loop_start` and `loop_period` in the episode CSV locate the cycle.
+The combat turn is part of the state, so identical turns in a stalemate are not
+stalls; `training.max_combat_turns` ends those fights as losses.
+Sampled training and evaluation episodes can leave such a cycle, so they only
+record it: the entity trainer logs the share of episodes with one as
+`rollout/loop_rate`. `Watch-Model.cmd` stops on the same rule in the real game.
+
+Card selections are add-only for policies: a selected card is never offered
+again, and confirmation becomes the only legal action once the maximum is
+selected. Every final selection is still reachable, and a selection can take at
+most `max + 1` decisions.
 
 Run tasks (`act1`, `full_run`) also record the end-of-run state of each episode:
 act, gold, max HP, deck size and composition (upgrades, attacks, skills, powers,
 curses/statuses), relics, potions held, card removals, rooms visited by type, and
 the full deck and relic lists (`;`-separated). The summary JSON averages these
 under `averages` and compares gold, deck size, relics, upgrades and floor for
-wins, losses and timeouts under `by_outcome`.
+wins, losses, timeouts and stalls under `by_outcome`.
 
 Press Ctrl+C once to save `interrupted_model.zip` and close the workers. A force
 kill or system shutdown may only leave periodic checkpoints.

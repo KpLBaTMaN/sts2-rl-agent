@@ -68,6 +68,7 @@ from sts2_env.core.enums import RoomType
 from sts2_env.gym_env.action_space import (
     action_to_card_and_target,
     action_to_potion_and_target,
+    fill_choice_mask,
     get_action_mask,
     is_potion_action,
 )
@@ -337,11 +338,12 @@ class STS2RunEnv(gymnasium.Env):
             and self._mgr.phase == RunManager.PHASE_COMBAT
         )
         phase = self._mgr.phase
-        actions = self._mgr.get_available_actions()
+        choice = self._mgr.active_card_choice
+        selected = set(choice.selected_indices) if choice is not None else None
 
         # ---- dispatch action to RunManager ----
         try:
-            if phase != RunManager.PHASE_COMBAT and any(a.get("action") in {"choose", "confirm_choice"} for a in actions):
+            if phase != RunManager.PHASE_COMBAT and choice is not None:
                 self._step_noncombat_choice(action)
             elif phase == RunManager.PHASE_COMBAT:
                 self._step_combat(action)
@@ -359,6 +361,13 @@ class STS2RunEnv(gymnasium.Env):
                 self._step_event(action)
             elif phase == RunManager.PHASE_TREASURE:
                 self._step_treasure()
+            # A pending choice only offers confirm and card actions; each one must change it.
+            if (choice is not None and not self._mgr.is_over
+                    and self._mgr.active_card_choice is choice and choice.selected_indices == selected):
+                raise RuntimeError(
+                    f"Card choice action {action} changed nothing: {choice.prompt!r}, "
+                    f"selected {sorted(selected)}, choices {choice.min_choices}-{choice.max_choices}"
+                )
         except Exception:
             if self.raise_simulation_errors:
                 raise
@@ -405,13 +414,11 @@ class STS2RunEnv(gymnasium.Env):
 
         phase = self._mgr.phase
         actions = self._mgr.get_available_actions()
+        choice = self._mgr.active_card_choice
 
-        if phase != RunManager.PHASE_COMBAT and any(a.get("action") in {"choose", "confirm_choice"} for a in actions):
-            if any(a.get("action") == "confirm_choice" for a in actions):
-                mask[layout.combat_start] = 1
-            choose_actions = [a for a in actions if a.get("action") == "choose"]
-            for i in range(min(len(choose_actions), layout.combat_size - 1)):
-                mask[layout.combat_start + 1 + i] = 1
+        if phase != RunManager.PHASE_COMBAT and choice is not None:
+            combat_mask = mask[layout.combat_start: layout.combat_start + layout.combat_size]
+            fill_choice_mask(choice, combat_mask)
         elif phase == RunManager.PHASE_COMBAT:
             combat = self._mgr.get_combat_state()
             if combat is not None:

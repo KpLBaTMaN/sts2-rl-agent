@@ -49,7 +49,8 @@ class PendingCardChoice:
         ]
 
     def can_confirm(self) -> bool:
-        if len(self.selected_indices) >= self.min_choices:
+        # The game hands back every option when there are fewer than the minimum.
+        if len(self.selected_indices) >= min(self.min_choices, len(self.options)):
             return True
         return self.allow_skip and not self.selected_indices
 
@@ -57,6 +58,37 @@ class PendingCardChoice:
         if index in self.selected_indices:
             return True
         return len(self.selected_indices) < self.max_choices
+
+    def can_select(self, index: int) -> bool:
+        """Whether *index* can be added; policies never deselect, so every choice ends."""
+        return (
+            0 <= index < len(self.options)
+            and index not in self.selected_indices
+            and len(self.selected_indices) < self.max_choices
+        )
+
+    def choice_actions(self) -> list[dict]:
+        """Legal confirm and toggle actions; ``index`` keeps the original option position."""
+        actions: list[dict] = []
+        if self.can_confirm():
+            actions.append({
+                "action": "confirm_choice",
+                "prompt": self.prompt,
+                "selected_count": len(self.selected_indices),
+            })
+        for i, option in enumerate(self.options):
+            if self.is_multi and not self.can_toggle(i):
+                continue
+            actions.append({
+                "action": "choose",
+                "index": i,
+                "card_id": option.card.card_id.name,
+                "cost": option.card.cost,
+                "source_pile": option.source_pile,
+                "prompt": self.prompt,
+                "selected": i in self.selected_indices,
+            })
+        return actions
 
     def toggle(self, index: int) -> bool:
         if index < 0 or index >= len(self.options):

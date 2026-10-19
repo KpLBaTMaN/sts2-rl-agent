@@ -18,6 +18,7 @@ const metrics = {
   floor:['Training floor reached','Rolling mean floor over the last 200 completed training episodes.','number'],
   reward:['Episode reward','Profile-specific reward over the last 200 episodes. Scales differ between profiles.','number'],
   episode_length:['Decisions per game run','Average decisions per completed training episode, rolling window of 200.','number'],
+  loop_rate:['Decision loop rate','Share of the last 200 training episodes that repeated an exact decision cycle three times.','percent'],
   entropy:['Policy entropy','Action uncertainty during PPO updates. Lower values mean more concentrated choices.','number'],
   policy_loss:['Policy loss','Mean clipped PPO policy loss across minibatch updates.','number'],
   value_loss:['Value loss','Mean value prediction loss across minibatch updates.','number'],
@@ -88,7 +89,7 @@ function render(){
   }).join('');
   $('comparison-body').innerHTML=runs.map(r=>{
     const s=r.best||validation(r),source=r.best?'Best checkpoint on separate final holdout seeds':'Latest periodic validation (checkpoint selection seeds)';
-    return `<tr title="${source}"><td><span class="row-label"><i class="swatch ${r.profile}"></i>${titles[r.profile]}</span></td><td><span class="status-label">${esc(r.status)}</span></td><td>${nf.format(currentSteps(r))}</td><td>${pct(s?.win_rate)}</td><td>${num(s?.average_floor)}</td><td>${pct(s?.boss_reached_rate)}</td><td>${num(s?.average_winning_hp)}</td><td>${s?.timeouts??'—'}</td><td>${r.checkpoints.length}</td></tr>`;
+    return `<tr title="${source}"><td><span class="row-label"><i class="swatch ${r.profile}"></i>${titles[r.profile]}</span></td><td><span class="status-label">${esc(r.status)}</span></td><td>${nf.format(currentSteps(r))}</td><td>${pct(s?.win_rate)}</td><td>${num(s?.average_floor)}</td><td>${pct(s?.boss_reached_rate)}</td><td>${num(s?.average_winning_hp)}</td><td>${s?.timeouts??'—'} / ${s?.stalls??'—'}</td><td>${r.checkpoints.length}</td></tr>`;
   }).join('');
   const gpu=state.gpu;
   $('hardware').textContent=gpu?.name?`${gpu.name} · ${gpu.utilization}% GPU · ${num(gpu.memory_used/1024,1)} / ${num(gpu.memory_total/1024,1)} GB · ${gpu.temperature}°C`:'GPU telemetry unavailable';

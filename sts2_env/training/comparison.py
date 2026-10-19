@@ -77,7 +77,7 @@ def write_comparison(root, manifest):
         summary = read_json(directory / "best-results.json", {}) if directory else {}
         rows.append(dict(profile=entry["profile"], status=entry["status"],
                          **{key: summary.get(key) for key in ("episodes", "wins", "win_rate", "average_floor",
-                            "boss_reached_rate", "boss_conversion_rate", "average_winning_hp", "losses", "timeouts")}))
+                            "boss_reached_rate", "boss_conversion_rate", "average_winning_hp", "losses", "timeouts", "stalls")}))
     atomic_json(root / "comparison.json", dict(runs=rows))
     with (root / "comparison.csv").open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]))

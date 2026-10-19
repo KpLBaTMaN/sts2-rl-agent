@@ -438,6 +438,8 @@ def encode_run_entities(env: STS2RunEnv, mask: np.ndarray) -> dict[str, np.ndarr
     rs = mgr.run_state
     player = rs.player
     in_combat = mgr.phase == RunManager.PHASE_COMBAT and mgr.get_combat_state() is not None
+    # Deck selections and event card selections both appear as choice items.
+    deck_choice = None if in_combat else mgr.active_card_choice
     if in_combat:
         obs = encode_entities(mgr.get_combat_state())
     else:
@@ -447,8 +449,8 @@ def encode_run_entities(env: STS2RunEnv, mask: np.ndarray) -> dict[str, np.ndarr
         _fill_piles(obs, None, (("deck", player.deck),))
         _fill_potions(obs, player.potions)
         _fill_relics(obs, rs.relics)
-        if rs.pending_choice is not None:
-            _fill_choice(obs, rs.pending_choice, None)
+        if deck_choice is not None:
+            _fill_choice(obs, deck_choice, None)
 
     r = obs["run"]
     r[0] = rs.current_act_index / 3.0
@@ -467,7 +469,7 @@ def encode_run_entities(env: STS2RunEnv, mask: np.ndarray) -> dict[str, np.ndarr
     phase_base = 12 + len(_ROOM_TYPES)
     if mgr.phase in _PHASE_INDEX:
         r[phase_base + _PHASE_INDEX[mgr.phase]] = 1.0
-    r[phase_base + len(_PHASE_INDEX)] = float(rs.pending_choice is not None and not in_combat)
+    r[phase_base + len(_PHASE_INDEX)] = float(deck_choice is not None)
 
     _fill_options(obs, env, mask)
     return obs
@@ -480,12 +482,7 @@ def encode_run_entities(env: STS2RunEnv, mask: np.ndarray) -> dict[str, np.ndarr
 def _pending_choice(base) -> object | None:
     if isinstance(base, STS2RunEnv):
         mgr = base._mgr
-        if mgr is None or mgr.is_over:
-            return None
-        if mgr.phase == RunManager.PHASE_COMBAT:
-            combat = mgr.get_combat_state()
-            return combat.pending_choice if combat is not None else None
-        return mgr.run_state.pending_choice
+        return None if mgr is None else mgr.active_card_choice
     combat = getattr(base, "combat", None)
     return combat.pending_choice if combat is not None else None
 

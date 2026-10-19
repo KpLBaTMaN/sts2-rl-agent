@@ -125,6 +125,7 @@ def train_entity(config: dict, directory: Path, evaluate, save_evaluation, proje
     recent: list[tuple[float, float, float]] = []  # (success, episode length, floor)
     recent_rewards: list[dict] = []  # per-term reward totals of finished episodes
     recent_runs: list[dict] = []  # end-of-run snapshots (absent for combat-only tasks)
+    recent_loops: list[float] = []  # 1 when a sampled episode repeated an exact decision cycle
     episode_lengths = np.zeros(n_envs, dtype=np.int64)
     best_score = (-1.0, -1.0)  # (win rate, average floor): floors break ties before any wins
     next_eval = num_timesteps + evaluation["every_steps"]
@@ -174,6 +175,7 @@ def train_entity(config: dict, directory: Path, evaluate, save_evaluation, proje
                     if terminated or truncated:
                         recent.append((float(info["is_success"]), float(episode_lengths[i]), float(info["floor"])))
                         recent_rewards.append(info["reward_terms"])
+                        recent_loops.append(float(info["loop"] is not None))
                         if "run_stats" in info:
                             recent_runs.append(info["run_stats"])
                         episode_lengths[i] = 0
@@ -233,6 +235,7 @@ def train_entity(config: dict, directory: Path, evaluate, save_evaluation, proje
             win_rate = float(np.mean([w for w, _, _ in window])) if window else 0.0
             mean_length = float(np.mean([n for _, n, _ in window])) if window else 0.0
             mean_floor = float(np.mean([f for _, _, f in window])) if window else 0.0
+            loop_rate = float(np.mean(recent_loops[-200:])) if recent_loops else 0.0
             fps = (num_timesteps - start_steps) / (time.perf_counter() - started)
             reward_window = recent_rewards[-200:]
             mean_reward = float(np.mean([sum(r.values()) for r in reward_window])) if reward_window else 0.0
@@ -242,7 +245,7 @@ def train_entity(config: dict, directory: Path, evaluate, save_evaluation, proje
             publish(directory, "rollout", steps=num_timesteps, target_steps=target,
                     elapsed_seconds=time.perf_counter() - started, fps=fps,
                     train_win_rate=win_rate, floor=mean_floor, episode_length=mean_length,
-                    reward=mean_reward, episodes=len(recent), policy_loss=float(policy_loss),
+                    reward=mean_reward, episodes=len(recent), loop_rate=loop_rate, policy_loss=float(policy_loss),
                     value_loss=float(value_loss), entropy=float(entropy), clip_fraction=float(clip_fraction),
                     reward_terms={term: float(np.mean([r[term] for r in reward_window])) for term in (reward_window[0] if reward_window else ())},
                     run_averages={key: float(np.mean([r[key] for r in run_window])) for key in (run_window[0] if run_window else ()) if isinstance(run_window[0][key], (int, float))})
@@ -253,6 +256,7 @@ def train_entity(config: dict, directory: Path, evaluate, save_evaluation, proje
                                 ("train/entropy", entropy), ("train/clip_fraction", clip_fraction),
                                 ("rollout/success_rate", win_rate), ("rollout/ep_len_mean", mean_length),
                                 ("rollout/floor_mean", mean_floor), ("rollout/ep_rew_mean", mean_reward),
+                                ("rollout/loop_rate", loop_rate),
                                 ("time/fps", fps)):
                 writer.add_scalar(name, value, num_timesteps)
             floor_text = "" if config["task"] == "combat" else f"| floor {mean_floor:5.2f} "

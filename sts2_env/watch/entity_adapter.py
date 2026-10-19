@@ -85,7 +85,8 @@ class EntityWatchAdapter(WatchAdapter):
             choices = {a: choice for a, choice in choices.items() if a <= E.MAX_CHOICES}
         return choices, automatic
 
-    def encode(self, state):
+    def encode(self, state, selected=()):
+        """``selected`` holds card indexes already picked on a card_select screen."""
         if state.get("entity_schema") != 1:
             raise ValueError("SpireFormer needs the updated entity-enabled bridge mod (entity_schema=1)")
         obs = E.empty_observation()
@@ -147,11 +148,15 @@ class EntityWatchAdapter(WatchAdapter):
         if kind == "card_select":
             phase = 1 if in_combat else {"RestSite": 5, "Event": 6}.get(run.get("room"), 2)
             obs["pending_choice"][0] = True
-            g[11:16] = [1, float(state.get("min_select", 0) == 0), float(state.get("max_select", 1) > 1), 0, state.get("max_select", 1) / 5]
+            # Same globals as PendingCardChoice: can_confirm, is_multi, selected count, maximum.
+            minimum, maximum = state.get("min_select", 0), state.get("max_select", 1)
+            can_confirm = len(selected) >= min(minimum, len(state.get("cards", [])))
+            g[11:16] = [1, float(can_confirm), float(minimum != 1 or maximum != 1), len(selected) / 5, maximum / 5]
             for i, card in enumerate(state.get("cards", [])[:E.MAX_CHOICES]):
                 obs["choice_ids"][i], obs["choice_mask"][i] = E._card_index(card["id"]), True
                 obs["choice_kinds"][i] = E._PILES.get(str(card.get("source_pile", "deck")).lower(), 0)
                 fill_card(card, obs["choice_features"][i])
+                obs["choice_features"][i][5] = float(i in selected)
         r = obs["run"]
         r[:12] = [run.get("act_index", 0) / 3, run.get("floor", 0) / 50, run.get("act_floor", 0) / 20,
                   g[0], g[1], run.get("gold", 0) / 500, run.get("deck_size", 0) / 40,

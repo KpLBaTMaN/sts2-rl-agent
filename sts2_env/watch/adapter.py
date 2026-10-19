@@ -20,7 +20,8 @@ class WatchAdapter:
         self.combat = StateAdapter()
         self.last_combat = np.zeros(131, dtype=np.float32)
 
-    def encode(self, state):
+    def encode(self, state, selected=()):
+        # The flat observation has no selection features, in training or here.
         kind = state["type"]
         run = state.get("run_state", {})
         phase = {"map_select": 0, "combat_action": 1, "card_reward": 2,

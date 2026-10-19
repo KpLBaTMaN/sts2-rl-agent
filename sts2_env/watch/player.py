@@ -24,6 +24,7 @@ from sts2_env.watch.control import Playback, Stopped
 from sts2_env.entity.ppo import EntityAgent, stack_observations, to_tensors
 from sts2_env.entity.model import masked_logits
 from sts2_env.watch.entity_adapter import EntityWatchAdapter
+from sts2_env.training.loops import LoopDetector, fingerprint
 
 ROOT = Path(__file__).resolve().parents[2]
 LOG = logging.getLogger(__name__)
@@ -90,27 +91,87 @@ def model_decision(model, adapter, state):
         if action >= len(mask):
             raise ValueError("Model action space does not match the bridge")
         mask[action] = True
-    obs = adapter.encode(state)
+    if state["type"] == "card_select":
+        return select_cards(model, adapter, state, choices, mask)
+    probabilities = policy_probabilities(model, adapter.encode(state), mask)
+    action = int(np.argmax(probabilities))
+    wire, label = choices[action]
+    labels = {a: choice[1] for a, choice in choices.items()}
+    return wire, proposal_for(model, action, label, labels, probabilities)
+
+
+def policy_probabilities(model, obs, mask):
     with torch.no_grad():
         if isinstance(model, EntityAgent):
             logits, _ = model.model(to_tensors(stack_observations([obs]), model.device))
-            probabilities = torch.softmax(masked_logits(logits, torch.as_tensor(mask[None], device=model.device)), -1).cpu().numpy()[0]
-        else:
-            tensor, _ = model.policy.obs_to_tensor(obs)
-            distribution = model.policy.get_distribution(tensor, action_masks=mask)
-            probabilities = distribution.distribution.probs.cpu().numpy()[0]
-    action = int(np.argmax(probabilities))
-    wire, label = choices[action]
-    # A live multi-select screen sends the complete required set in one UI decision.
-    if state["type"] == "card_select" and state.get("min_select", 0) > 1:
-        count = min(state["min_select"], state.get("max_select", 1), len(state.get("cards", [])))
-        ranking = sorted((a for a in choices if a > 0), key=lambda a: -probabilities[a])
-        indexes = [choices[a][0]["index"] for a in ranking[:count]]
-        wire = {"action": "choose", "indexes": indexes}
-        label = f"Select cards {indexes} (ranked by policy)"
-    ranked = sorted(choices, key=lambda a: -probabilities[a])[:5]
-    return wire, dict(action=action, label=label, source="Trained SpireFormer policy" if isinstance(model, EntityAgent) else "Trained Act 1 policy",
-                      probabilities=[dict(label=choices[a][1], probability=float(probabilities[a])) for a in ranked])
+            return torch.softmax(masked_logits(logits, torch.as_tensor(mask[None], device=model.device)), -1).cpu().numpy()[0]
+        tensor, _ = model.policy.obs_to_tensor(obs)
+        distribution = model.policy.get_distribution(tensor, action_masks=mask)
+        return distribution.distribution.probs.cpu().numpy()[0]
+
+
+def proposal_for(model, action, label, labels, probabilities):
+    ranked = sorted(labels, key=lambda a: -probabilities[a])[:5]
+    return dict(action=action, label=label, source="Trained SpireFormer policy" if isinstance(model, EntityAgent) else "Trained Act 1 policy",
+                probabilities=[dict(label=labels[a], probability=float(probabilities[a])) for a in ranked])
+
+
+def select_cards(model, adapter, state, choices, mask):
+    """Pick cards one at a time as in training: each pick is final and Confirm (action 0) ends it.
+
+    The bridge takes the whole selection in one reply, so the picks are made here
+    against an observation that shows the cards chosen so far, then sent together.
+    """
+    minimum, maximum = state.get("min_select", 0), state.get("max_select", 1)
+    multi = minimum != 1 or maximum != 1
+    required = min(minimum, len(state.get("cards", [])))
+    options = {a: choice[0]["index"] for a, choice in choices.items() if a > 0}
+    selected, picks, first = [], [], None
+    # Every pass either confirms or adds a card, so this ends within maximum + 1 passes.
+    while True:
+        step = np.zeros_like(mask)
+        step[0] = len(selected) >= required
+        if len(selected) < maximum:
+            for action, index in options.items():
+                step[action] = index not in selected
+        if not step.any():
+            if first is None:
+                raise ValueError("The live card selection offers no legal choice")
+            break
+        labels = {a: (choices[a][1] if a else "Skip selection" if not selected else "Confirm selection")
+                  for a in np.flatnonzero(step)}
+        probabilities = policy_probabilities(model, adapter.encode(state, selected), step)
+        action = int(np.argmax(probabilities))
+        first = first or (action, labels, probabilities)
+        picks.append(dict(label=labels[action], probability=float(probabilities[action])))
+        if action == 0:
+            break
+        selected.append(options[action])
+        if not multi:
+            break
+    if not selected:
+        wire, label = {"action": "skip"}, "Skip selection"
+    elif not multi:
+        wire, label = {"action": "choose", "index": selected[0]}, picks[0]["label"]
+    else:
+        names = [str(state["cards"][i].get("id", i)) for i in selected]
+        wire, label = {"action": "choose", "indexes": selected}, f"Select {', '.join(names)} (one at a time, then confirm)"
+    action, labels, probabilities = first
+    return wire, dict(proposal_for(model, action, label, labels, probabilities), picks=picks)
+
+
+def decision_key(state, wire):
+    """Identify a live decision by its full state and reply; request IDs are transport only."""
+    content = {key: value for key, value in state.items() if key != "request_id"}
+    reply = {key: value for key, value in wire.items() if key != "request_id"}
+    return fingerprint(json.dumps(content, sort_keys=True), json.dumps(reply, sort_keys=True))
+
+
+def loop_message(period, repeats, state, proposal):
+    cycle = "the same decision" if period == 1 else f"the same {period}-decision cycle"
+    return (f"The game repeated {cycle} {repeats} times without progress "
+            f"({state['type']}: {proposal['label']}). Automation stopped before sending it again; "
+            "see decisions.jsonl for the repeating states.")
 
 
 def compare_map(state, live):
@@ -142,6 +203,8 @@ def worker(playback, model, live, directory, max_decisions):
             playback.status = "Connected; waiting for a decision"
         map_checked = False
         last_response = time.monotonic()
+        # Continuous repeats never trip the silence timeout, so stop on exact cycles instead.
+        loops = LoopDetector()
         while not playback.stopped:
             try:
                 state = client.receive_state()
@@ -167,6 +230,13 @@ def worker(playback, model, live, directory, max_decisions):
             if playback.count >= max_decisions:
                 raise ValueError("Configured decision limit reached. Automation has stopped.")
             wire, proposal = model_decision(model, adapter, state)
+            key = decision_key(state, wire)
+            period = loops.push(key)
+            if period:
+                transcript.write(json.dumps(dict(state=state, proposal=proposal, sent=None, fingerprint=key,
+                                                 stopped=f"loop period {period}")) + "\n")
+                transcript.flush()
+                raise ValueError(loop_message(period, loops.repeats, state, proposal))
             playback.gate(state, proposal)
             # Control messages consume the client's implicit correlation ID too.
             # Attach the game request ID explicitly to the actual decision.
@@ -174,7 +244,7 @@ def worker(playback, model, live, directory, max_decisions):
             client.send_action({"action": "watch_speed", "multiplier": 5 if playback.skip else 1})
             client.send_action(wire)
             last_response = time.monotonic()
-            transcript.write(json.dumps(dict(state=state, proposal=proposal, sent=wire)) + "\n")
+            transcript.write(json.dumps(dict(state=state, proposal=proposal, sent=wire, fingerprint=key)) + "\n")
             transcript.flush()
     except Stopped:
         with playback.condition:

@@ -47,13 +47,17 @@ def evaluate(config, episodes, model=None, progress=None):
                 obs, reward, terminated, truncated, info = env.step(action)
                 score += reward
                 if terminated or truncated:
+                    loop = info["loop"] or {}
                     rows.append(dict(episode=episode + 1, seed=info["run_seed"],
                                      win=info["is_success"], floor=info["floor"],
                                      hp=info["remaining_hp"], decisions=info["decisions"],
                                      boss_reached=info["boss_reached"],
-                                     death_room=info["death_room"], timed_out=info["timed_out"], reward=score,
+                                     death_room=info["death_room"], timed_out=info["timed_out"],
+                                     stalled=info["stalled"], loop_start=loop.get("start"),
+                                     loop_period=loop.get("period"), reward=score,
                                      **{f"reward_{term}": value for term, value in info["reward_terms"].items()},
-                                     **info.get("run_stats", {})))
+                                     **info.get("run_stats", {}),
+                                     decision_trace=info["decision_trace"]))
                     if progress:
                         progress(episode + 1, episodes)
                     break
@@ -75,10 +79,11 @@ def evaluate(config, episodes, model=None, progress=None):
                    max_floor=max(r["floor"] for r in rows),
                    average_decisions=float(np.mean([r["decisions"] for r in rows])),
                    average_reward=float(np.mean([r["reward"] for r in rows])),
-                   timeouts=sum(r["timed_out"] for r in rows), deaths_by_room=deaths,
+                   timeouts=sum(r["timed_out"] for r in rows), stalls=sum(r["stalled"] for r in rows),
+                   loops_detected=sum(r["loop_start"] is not None for r in rows), deaths_by_room=deaths,
                    average_reward_terms={key[7:]: float(np.mean([r[key] for r in rows]))
                                          for key in rows[0] if key.startswith("reward_")})
-    summary["losses"] = episodes - wins - summary["timeouts"]
+    summary["losses"] = episodes - wins - summary["timeouts"] - summary["stalls"]
     if config["task"] == "combat":
         summary["boss_reached_rate"] = None
         summary["boss_conversion_rate"] = None
@@ -106,11 +111,14 @@ def run_summary(rows):
     def mean(group, key):
         return float(np.mean([r[key] for r in group])) if group else None
     wins = [r for r in rows if r["win"]]
-    losses = [r for r in rows if not r["win"] and not r["timed_out"]]
+    # Rows saved before stall detection have no "stalled" column.
+    losses = [r for r in rows if not r["win"] and not r["timed_out"] and not r.get("stalled")]
     timeouts = [r for r in rows if r["timed_out"]]
+    stalls = [r for r in rows if r.get("stalled")]
     return dict(averages={key: mean(rows, key) for key in RUN_AVERAGES},
                 by_outcome={name: {key: mean(group, key) for key in OUTCOME_AVERAGES}
-                            for name, group in (("wins", wins), ("losses", losses), ("timeouts", timeouts))})
+                            for name, group in (("wins", wins), ("losses", losses), ("timeouts", timeouts),
+                                                ("stalls", stalls))})
 
 
 def item_stats(rows, column):
@@ -129,7 +137,9 @@ def item_stats(rows, column):
 
 def write_csv(path, rows):
     with path.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        # Decision traces are nested; they are written to their own JSONL file.
+        writer = csv.DictWriter(stream, fieldnames=[key for key in rows[0] if key != "decision_trace"],
+                                extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -137,6 +147,8 @@ def write_csv(path, rows):
 def format_summary(summary):
     text = (f"Final: {summary['wins']}/{summary['episodes']} wins ({summary['win_rate']:.1%}), "
             f"{summary['losses']} losses, {summary['timeouts']} timeouts")
+    if "stalls" in summary:
+        text += f", {summary['stalls']} stalls"
     if "averages" in summary:
         avg = summary["averages"]
         text += (f"\n  avg act {avg['act']:.2f} | floor {summary['average_floor']:.2f} | gold {avg['gold']:.0f} "
@@ -148,6 +160,15 @@ def format_summary(summary):
 def save_evaluation(directory, label, summary, rows):
     (directory / f"{label}.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     write_csv(directory / f"{label}-episodes.csv", rows)
+    traced = [row for row in rows if row.get("decision_trace")]
+    if traced:
+        with (directory / f"{label}-traces.jsonl").open("w", encoding="utf-8") as stream:
+            for row in traced:
+                outcome = "stall" if row["stalled"] else "timeout" if row["timed_out"] else "win" if row["win"] else "loss"
+                stream.write(json.dumps(dict(episode=row["episode"], seed=row["seed"], outcome=outcome,
+                                             floor=row["floor"], decisions=row["decisions"],
+                                             loop_start=row["loop_start"], loop_period=row["loop_period"],
+                                             trace=row["decision_trace"])) + "\n")
     for column, name in (("relics", "relic-stats"), ("deck", "card-stats")):
         stats = item_stats(rows, column) if column in rows[0] else []
         if stats:
