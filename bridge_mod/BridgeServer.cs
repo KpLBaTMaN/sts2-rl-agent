@@ -125,6 +125,16 @@ public class BridgeServer
     public async Task<string?> SendStateAndWaitForActionAsync(
         string stateJson, TimeSpan timeout, CancellationToken ct)
     {
+        if (WatchSession.Enabled) {
+            ct = WatchSession.Cancellation.Token;
+            // A missing controller must not turn watched play into random play.
+            while (!IsClientConnected) {
+                ct.ThrowIfCancellationRequested();
+                RlAutoSlayer.CurrentWatchdog?.Reset("Waiting for watch controller");
+                await Task.Delay(200, ct);
+            }
+            stateJson = WatchSession.Enrich(stateJson);
+        }
         string requestId = Interlocked.Increment(ref _requestCounter).ToString();
         TaskCompletionSource<string> tcs;
         lock (_pendingLock)
@@ -142,6 +152,14 @@ public class BridgeServer
             if (!SendStateInternal(payload))
             {
                 return null;
+            }
+            if (WatchSession.Enabled) {
+                while (!tcs.Task.IsCompleted) {
+                    ct.ThrowIfCancellationRequested();
+                    RlAutoSlayer.CurrentWatchdog?.Reset("Watch paused / awaiting decision");
+                    await Task.WhenAny(tcs.Task, Task.Delay(200, ct)).ConfigureAwait(false);
+                }
+                return await tcs.Task.ConfigureAwait(false);
             }
             return await WaitForPendingActionAsync(tcs, timeout, ct);
         }
@@ -302,6 +320,7 @@ public class BridgeServer
         }
         finally
         {
+            if (WatchSession.Enabled) MainFile.StopAutomation();
             CancelPendingAction("Client disconnected");
             DisconnectClient();
         }
@@ -323,6 +342,14 @@ public class BridgeServer
             if (root.TryGetProperty("action", out var actionProp))
             {
                 string action = actionProp.GetString() ?? "";
+                if (WatchSession.Enabled && action == "watch_speed") {
+                    WatchSession.Speed = Math.Clamp(root.GetProperty("multiplier").GetSingle(), 1, 10);
+                    return;
+                }
+                if (WatchSession.Enabled && action == "watch_stop") {
+                    MainFile.StopAutomation();
+                    return;
+                }
                 if (action.Equals("ping", StringComparison.OrdinalIgnoreCase))
                 {
                     SendState("{\"type\":\"pong\"}");

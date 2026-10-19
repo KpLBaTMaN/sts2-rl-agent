@@ -122,6 +122,7 @@ public class RlCardRewardScreenHandler : IScreenHandler, IHandler
             }
             catch (Exception ex)
             {
+                if (WatchSession.Enabled) throw;
                 Logger.Log($"[RlCardReward] Agent error: {ex.Message}");
             }
         }
@@ -166,6 +167,7 @@ public class RlCardRewardScreenHandler : IScreenHandler, IHandler
         }
         catch (Exception ex)
         {
+                if (WatchSession.Enabled) throw;
             Logger.Log($"[RlCardReward] Skip helper error: {ex.Message}");
         }
 

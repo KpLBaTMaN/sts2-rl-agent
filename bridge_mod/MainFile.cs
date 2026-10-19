@@ -14,6 +14,7 @@ using MegaCrit.Sts2.Core.Commands;
 using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Modding;
 using MegaCrit.Sts2.Core.Nodes;
+using MegaCrit.Sts2.Core.Saves;
 
 namespace STS2BridgeMod;
 
@@ -29,6 +30,16 @@ public partial class MainFile : Node
     {
         Logger.Log("=== STS2 RL Bridge Mod Initializing ===");
 
+        // Enable automation only for the dedicated AI launcher.
+        if (!CommandLineHelper.HasArg("sts2-rl") && !WatchSession.Enabled &&
+            System.Environment.GetEnvironmentVariable("STS2_RL_ENABLED") != "1")
+        {
+            Logger.Log("AI automation disabled. Use Play-AI.cmd to enable it.");
+            return;
+        }
+
+        WatchSession.Load();
+
         // Phase 1: Harmony patches
         try
         {
@@ -39,6 +50,9 @@ public partial class MainFile : Node
                 typeof(IsReleaseGamePatch),
                 typeof(WaitSpeedPatch),
                 typeof(AnimationSpeedPatch),
+                typeof(AiProfilePathPatch),
+                typeof(WatchOpeningPatch),
+                typeof(WatchRunConfigurationPatch),
             };
 
             int patched = 0;
@@ -112,12 +126,21 @@ public partial class MainFile : Node
             () => root.GetNodeOrNull<Control>("/root/Game/RootSceneContainer/MainMenu")?.IsVisibleInTree() ?? false,
             cts.Token, TimeSpan.FromSeconds(60), "Main menu not visible");
         Logger.Log("[RlAutoSlay] Main menu visible. Creating RL AutoSlayer...");
+        if (WatchSession.Enabled)
+            await WaitHelper.Until(() => BridgeServer.Instance.IsClientConnected,
+                WatchSession.Cancellation.Token, TimeSpan.FromMinutes(10), "Watch controller did not connect");
 
         // Create and start the RL-driven AutoSlayer
         _autoSlayer = new RlAutoSlayer();
-        string seed = SeedHelper.GetRandomSeed();
+        string seed = WatchSession.Enabled ? WatchSession.Seed : SeedHelper.GetRandomSeed();
         Logger.Log($"[RlAutoSlay] Starting RL run with seed: {seed}");
         _autoSlayer.Start(seed);
+    }
+
+    public static void StopAutomation()
+    {
+        WatchSession.Cancellation.Cancel();
+        _autoSlayer?.Stop();
     }
 }
 
@@ -140,6 +163,18 @@ public static class IsReleaseGamePatch
     }
 }
 
+// Route automated play into a separate save directory.
+[HarmonyPatch(typeof(UserDataPathProvider), nameof(UserDataPathProvider.GetProfileDir))]
+public static class AiProfilePathPatch
+{
+    [HarmonyPrefix]
+    static bool Prefix(int profileId, ref string __result)
+    {
+        __result = WatchSession.Enabled ? $"modded/rl-watch/profile{profileId}" : $"modded/rl-agent/profile{profileId}";
+        return false;
+    }
+}
+
 /// <summary>Patch Cmd.CustomScaledWait to reduce all timed delays.</summary>
 [HarmonyPatch(typeof(Cmd), nameof(Cmd.CustomScaledWait))]
 public static class WaitSpeedPatch
@@ -149,8 +184,9 @@ public static class WaitSpeedPatch
     [HarmonyPrefix]
     static void Prefix(ref float fastSeconds, ref float standardSeconds)
     {
-        fastSeconds *= WaitMultiplier;
-        standardSeconds *= WaitMultiplier;
+        float factor = WatchSession.Enabled ? 1f / WatchSession.Speed : WaitMultiplier;
+        fastSeconds *= factor;
+        standardSeconds *= factor;
     }
 }
 
@@ -162,9 +198,9 @@ public static class AnimationSpeedPatch
     public static float AnimMultiplier = 5.0f;
 
     [HarmonyPrefix]
-    static void Prefix(ref float timeScale)
+    static void Prefix(ref float __0)
     {
-        timeScale *= AnimMultiplier;
+        __0 *= WatchSession.Enabled ? WatchSession.Speed : AnimMultiplier;
     }
 }
 

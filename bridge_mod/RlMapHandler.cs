@@ -73,6 +73,9 @@ public class RlMapHandler : IScreenHandler, IHandler
                 .ToList();
         }
 
+        if (WatchSession.Enabled)
+            availableNodes = availableNodes.OrderBy(mp => mp.Point.coord.col).ToList();
+
         if (availableNodes.Count == 0)
         {
             Logger.Log("[RlMap] No available nodes found!");
@@ -138,6 +141,7 @@ public class RlMapHandler : IScreenHandler, IHandler
             }
             catch (Exception ex)
             {
+                if (WatchSession.Enabled) throw;
                 Logger.Log($"[RlMap] Agent error: {ex.Message}, falling back to random");
                 chosenNode = random.NextItem(availableNodes);
             }
@@ -146,6 +150,15 @@ public class RlMapHandler : IScreenHandler, IHandler
         {
             Logger.Log("[RlMap] No agent connected, selecting random node");
             chosenNode = random.NextItem(availableNodes);
+        }
+
+        // The skipped opening has no native vote history. Enter the legal chosen
+        // child through the game's own room transition API instead of a UI vote.
+        if (WatchSession.Enabled) {
+            runNode.GlobalUi.MapScreen.Close(animateOut: false);
+            await RunManager.Instance.EnterMapCoord(chosenNode.Point.coord);
+            Logger.Log("[Watch] Entered selected map room");
+            return;
         }
 
         // Wait for the node to be enabled and click it

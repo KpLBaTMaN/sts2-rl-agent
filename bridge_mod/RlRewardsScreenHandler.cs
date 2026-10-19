@@ -153,6 +153,7 @@ public class RlRewardsScreenHandler : IScreenHandler, IHandler
         }
         catch (Exception ex)
         {
+                if (WatchSession.Enabled) throw;
             AutoSlayLog.Warn("[RlRewards] Agent error: " + ex.Message);
         }
 

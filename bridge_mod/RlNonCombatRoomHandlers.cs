@@ -65,6 +65,7 @@ internal static class NonCombatBridgeProtocol
     public const string ProceedAction = "proceed";
     public const string VictoryResult = "victory";
     public const string TerminatedResult = "terminated";
+    public const string ActOneVictoryResult = "act1_victory";
     public const string GameOverMessage = "Game over";
 }
 
@@ -163,6 +164,7 @@ public class RlRestSiteRoomHandler : IRoomHandler, IHandler
         }
         catch (Exception ex)
         {
+                if (WatchSession.Enabled) throw;
             AutoSlayLog.Warn("[RlRestSite] Agent error: " + ex.Message);
         }
 
@@ -266,6 +268,7 @@ public class RlTreasureRoomHandler : IRoomHandler, IHandler
         }
         catch (Exception ex)
         {
+                if (WatchSession.Enabled) throw;
             AutoSlayLog.Warn("[RlTreasure] Agent error: " + ex.Message);
         }
 
@@ -365,6 +368,7 @@ public class RlChooseARelicScreenHandler : IScreenHandler, IHandler
         }
         catch (Exception ex)
         {
+                if (WatchSession.Enabled) throw;
             AutoSlayLog.Warn("[RlChooseARelic] Agent error: " + ex.Message);
         }
 
@@ -524,6 +528,7 @@ public class RlShopRoomHandler : IRoomHandler, IHandler
         }
         catch (Exception ex)
         {
+                if (WatchSession.Enabled) throw;
             AutoSlayLog.Warn("[RlShop] Agent error: " + ex.Message);
         }
 
@@ -734,6 +739,7 @@ public class RlEventRoomHandler : IRoomHandler, IHandler
         }
         catch (Exception ex)
         {
+                if (WatchSession.Enabled) throw;
             AutoSlayLog.Warn("[RlEvent] Agent error: " + ex.Message);
         }
 

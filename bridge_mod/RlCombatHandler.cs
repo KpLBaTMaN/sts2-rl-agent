@@ -66,7 +66,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
 
             // Wait for play phase
             await WaitHelper.Until(
-                () => CombatManager.Instance.IsPlayPhase ||
+                () => (player.PlayerCombatState?.Phase == PlayerTurnPhase.Play) ||
                       !CombatManager.Instance.IsInProgress,
                 ct, TimeSpan.FromSeconds(30), "Play phase not started");
 
@@ -79,7 +79,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
             int cardsPlayed = 0;
             bool turnEnded = false;
 
-            while (!turnEnded && cardsPlayed < 50 && CombatManager.Instance.IsPlayPhase)
+            while (!turnEnded && cardsPlayed < 50 && (player.PlayerCombatState?.Phase == PlayerTurnPhase.Play))
             {
                 ct.ThrowIfCancellationRequested();
 
@@ -108,6 +108,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
                     }
                     catch (Exception ex)
                     {
+                if (WatchSession.Enabled) throw;
                         Logger.Log($"[RlCombat] Agent communication error: {ex.Message}");
                     }
                 }
@@ -131,7 +132,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
             }
 
             // If we ran out of cards to play without ending turn, end it
-            if (CombatManager.Instance.IsPlayPhase && CombatManager.Instance.IsInProgress && !turnEnded)
+            if ((player.PlayerCombatState?.Phase == PlayerTurnPhase.Play) && CombatManager.Instance.IsInProgress && !turnEnded)
             {
                 PlayerCmd.EndTurn(player, canBackOut: false);
             }
@@ -225,6 +226,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
         }
         catch (Exception ex)
         {
+                if (WatchSession.Enabled) throw;
             Logger.Log($"[RlCombat] Error executing agent action: {ex.Message}");
             return false;
         }
@@ -268,7 +270,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
         if (card.TargetType != TargetType.AnyEnemy)
             return null;
 
-        CombatState combatState = card.CombatState;
+        ICombatState combatState = card.CombatState;
         if (combatState == null)
             return null;
 
@@ -295,7 +297,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
         string targetType = "Self";
         try
         {
-            targetType = potion.TargetType?.ToString() ?? "Self";
+            targetType = potion.TargetType.ToString();
         }
         catch
         {
@@ -304,7 +306,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
 
         if (targetType == "AnyEnemy")
         {
-            CombatState? combatState = player.Creature?.CombatState;
+            ICombatState? combatState = player.Creature?.CombatState;
             if (combatState == null)
                 return null;
             List<Creature> allEnemies = combatState.Enemies.ToList();
@@ -328,7 +330,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
     {
         if (card.TargetType != TargetType.AnyEnemy)
             return null;
-        CombatState combatState = card.CombatState;
+        ICombatState combatState = card.CombatState;
         if (combatState == null)
             return null;
         List<Creature> hittable = combatState.HittableEnemies.ToList();
@@ -341,17 +343,16 @@ public class RlCombatHandler : IRoomHandler, IHandler
         Player player, CardModel card, Creature? target, CancellationToken ct)
     {
         var playAction = new PlayCardAction(card, target);
-        RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(playAction);
-
         int energyBefore = player.PlayerCombatState?.Energy ?? -1;
         int handBefore = PileType.Hand.GetPile(player).Cards.Count;
+        RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(playAction);
         int waitMs = 0;
         while (waitMs < 3000)
         {
             int energyNow = player.PlayerCombatState?.Energy ?? -1;
             int handNow = PileType.Hand.GetPile(player).Cards.Count;
             if (energyNow != energyBefore || handNow != handBefore
-                || !CombatManager.Instance.IsPlayPhase
+                || !(player.PlayerCombatState?.Phase == PlayerTurnPhase.Play)
                 || !CombatManager.Instance.IsInProgress)
                 break;
             await Task.Delay(50, ct);
@@ -402,7 +403,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
                 potionNow = null;
             }
 
-            if (potionNow == null || !CombatManager.Instance.IsPlayPhase || !CombatManager.Instance.IsInProgress)
+            if (potionNow == null || !(player.PlayerCombatState?.Phase == PlayerTurnPhase.Play) || !CombatManager.Instance.IsInProgress)
                 break;
             await Task.Delay(50, ct);
             waitMs += 50;
@@ -413,7 +414,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
     // State serialization
     // ----------------------------------------------------------------
 
-    private string SerializeCombatState(Player player)
+    internal string SerializeCombatState(Player player)
     {
         try
         {
@@ -497,6 +498,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
         }
         catch (Exception ex)
         {
+                if (WatchSession.Enabled) throw;
             Logger.Log($"[RlCombat] Error serializing combat state: {ex.Message}");
             return "{\"type\":\"combat_action\",\"error\":\"serialization_failed\"}";
         }
@@ -569,7 +571,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
 
                     if (firstIntent is AttackIntent attackIntent)
                     {
-                        CombatState cs = enemy.CombatState;
+                        ICombatState cs = enemy.CombatState;
                         if (cs != null)
                         {
                             try
@@ -607,7 +609,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
                     bool canUse = true;
                     try
                     {
-                        targetType = potion.TargetType?.ToString() ?? "Self";
+                        targetType = potion.TargetType.ToString();
                     }
                     catch { }
 
@@ -635,6 +637,7 @@ public class RlCombatHandler : IRoomHandler, IHandler
         }
         catch (Exception ex)
         {
+                if (WatchSession.Enabled) throw;
             Logger.Log($"[RlCombat] Error serializing potions: {ex.Message}");
         }
 

@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Godot;
+using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.AutoSlay;
 using MegaCrit.Sts2.Core.AutoSlay.Handlers;
 using MegaCrit.Sts2.Core.AutoSlay.Helpers;
@@ -99,6 +100,7 @@ public class RlCardBundleScreenHandler : IScreenHandler, IHandler
         }
         catch (Exception ex)
         {
+                if (WatchSession.Enabled) throw;
             AutoSlayLog.Warn("[RlCardBundle] Agent error: " + ex.Message);
         }
 

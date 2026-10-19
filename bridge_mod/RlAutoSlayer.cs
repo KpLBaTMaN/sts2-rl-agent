@@ -181,7 +181,7 @@ public class RlAutoSlayer
         {
             await WaitHelper.WithTimeout(
                 (CancellationToken token) => PlayRunAsync(seed, token),
-                TimeSpan.FromMinutes(RunTimeoutMinutes),
+                WatchSession.Timeout(TimeSpan.FromMinutes(RunTimeoutMinutes)),
                 ct);
             Logger.Log($"[RlAutoSlayer] Run completed with seed: {seed}");
         }
@@ -218,6 +218,8 @@ public class RlAutoSlayer
         NGame.Instance.DebugSeedOverride = seed;
         SaveManager.Instance.PrefsSave.FastMode = FastModeType.Fast;
         SaveManager.Instance.SetFtuesEnabled(enabled: false);
+        if (WatchSession.Enabled)
+            SaveManager.Instance.ObtainEpochOverride(EpochModel.GetId<NeowEpoch>(), EpochState.Revealed);
 
         // Unlock all epochs
         SaveManager.Instance.ObtainEpochOverride(
@@ -246,6 +248,8 @@ public class RlAutoSlayer
             TimeSpan.FromSeconds(RunStateTimeoutSeconds), "Run state not initialized");
 
         RunState runState = RunManager.Instance.DebugOnlyGetState();
+        if (WatchSession.Enabled && (runState.AscensionLevel != WatchSession.Ascension || runState.Rng.StringSeed != WatchSession.Seed))
+            throw new InvalidOperationException("Live run configuration does not match requested seed/ascension");
         Logger.Log($"[RlAutoSlayer] RunState available. Floor: {runState.TotalFloor}");
 
         await WaitHelper.Until(
@@ -268,6 +272,14 @@ public class RlAutoSlayer
                 $"[RlAutoSlayer] Entering {roomType} (Act {runState.CurrentActIndex + 1}, Floor {runState.ActFloor})");
 
             await HandleRoomAsync(roomType, ct);
+
+            if (WatchSession.Enabled && WatchSession.ActOneOnly && roomType == RoomType.Boss &&
+                runState.CurrentActIndex == 0 && runState.Players.All(p => p.Creature.CurrentHp > 0))
+            {
+                BridgeServer.Instance.SendState(RunCompleteState(NonCombatBridgeProtocol.ActOneVictoryResult));
+                _completionSignalSent = true;
+                return;
+            }
 
             // After combat rooms, wait for rewards screen
             if (roomType == RoomType.Monster || roomType == RoomType.Elite ||
@@ -349,7 +361,7 @@ public class RlAutoSlayer
         }
         await WaitHelper.WithTimeout(
             (CancellationToken token) => handler.HandleAsync(_random, token),
-            handler.Timeout, ct);
+            WatchSession.Timeout(handler.Timeout), ct);
     }
 
     private async Task DrainOverlayScreensAsync(CancellationToken ct)
@@ -405,7 +417,7 @@ public class RlAutoSlayer
             Logger.Log($"[RlAutoSlayer] Handling screen: {type.Name}");
             await WaitHelper.WithTimeout(
                 (CancellationToken token) => handler.HandleAsync(_random, token),
-                handler.Timeout, ct);
+                WatchSession.Timeout(handler.Timeout), ct);
 
             if (currentOverlay is NRewardsScreen &&
                 (NMapScreen.Instance?.IsOpen ?? false))
@@ -579,16 +591,27 @@ public class RlAutoSlayer
 
         // Pick Ironclad (first available) instead of random
         NCharacterSelectButton selectedChar = available.FirstOrDefault(
-            b => b.Character.Id.Entry.Contains(PreferredCharacterId,
+            b => b.Character.Id.Entry.Contains(WatchSession.Enabled ? WatchSession.Character : PreferredCharacterId,
                 StringComparison.OrdinalIgnoreCase))
-            ?? available.First();
+            ?? (WatchSession.Enabled ? throw new InvalidOperationException("Configured character is unavailable") : available.First());
         Logger.Log($"[RlAutoSlayer] Selecting character: {selectedChar.Character.Id}");
         selectedChar.Select();
         await Task.Delay(CharacterSelectDelayMs, ct);
 
+        if (WatchSession.Enabled) {
+            var panel = UiHelper.FindFirst<NAscensionPanel>(charSelectScreen);
+            if (panel == null && WatchSession.Ascension != 0)
+                throw new InvalidOperationException("Cannot apply requested ascension");
+            if (panel != null) {
+                panel.SetMaxAscension(Math.Max(WatchSession.Ascension, 1));
+                panel.SetAscensionLevel(WatchSession.Ascension);
+            }
+        }
+
         NButton confirmBtn = await WaitHelper.ForNode<NButton>(
             mainMenu, CharacterConfirmButtonPath, ct);
         Logger.Log("[RlAutoSlayer] Confirming character");
+        if (WatchSession.Enabled) NGame.Instance.DebugSeedOverride = WatchSession.Seed;
         await UiHelper.Click(confirmBtn);
     }
 
