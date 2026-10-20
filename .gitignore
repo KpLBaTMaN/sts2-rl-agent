@@ -53,3 +53,7 @@ local/tools/
 
 # NuGet
 nuget.config
+
+# Generated live-preview backups and machine-specific session settings
+/local/backups/before-s42-preview-*/
+/local/config/watch-replicate-shaped-s42.json

@@ -1,0 +1,9 @@
+{
+  "title": "Reward v2 \u00b7 sparse, shaped, survival, deckbuilder (4 x 5M decisions)",
+  "runs": [
+    "sparse-v2.json",
+    "shaped-v2.json",
+    "survival-v2.json",
+    "deckbuilder-v2.json"
+  ]
+}

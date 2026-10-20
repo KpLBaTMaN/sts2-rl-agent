@@ -1,6 +1,7 @@
 # Live reward comparison
 
-The local dashboard watches a durable queue of three independent SpireFormer
+The local dashboard watches a prepared training queue or a campaign of queues.
+The original comparison contains three independent SpireFormer
 experiments: sparse, shaped, then survival. Only one trainer runs at a time.
 Closing the browser or dashboard does not interrupt the separate queue process.
 Keep the computer awake for training to continue.
@@ -76,7 +77,20 @@ silently repeats or overwrites work.
 
 `--prepare --plan <file>` queues any list of preset files instead of the three
 profiles; `local/config/presets/reward-ablation/README.md` shows the reward
-ablation queues. The dashboard's labels only cover the three profiles.
+ablation queues. Labels, colours, chart filters and configuration selectors now support every experiment in a queue.
+
+For the systematic v3 campaign, open `http://127.0.0.1:8770/`; its root is
+`output/training-campaign-20261020`. It retains the completed screen, continues
+the baseline/horizon queue, replicates the selected upgrade candidate at three
+model seeds, then runs all four v2 rewards. `campaign.json` records frozen
+training-source fingerprints, queue order and selection evidence. The runner
+stops before a later queue if training code changes or a stage fails.
+
+The **Models** tab (`/models`) lists completed, training, queued and abandoned
+experiments across `output/`, with best/final/validation results and seed pools.
+The real-game Model player uses the same catalog. Smoke diagnostics are hidden.
+Pause applies to every queue in a campaign, so it also holds the next stage.
+
 
 For a short end-to-end diagnostic, add `--smoke` when preparing a separate queue.
 It uses the same model on CUDA but tiny rollouts and episode limits. Its results

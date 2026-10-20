@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, urlparse
 
 from sts2_env.training.comparison import experiment_directory, read_json
 from sts2_env.training.telemetry import atomic_json
+from sts2_env.watch.catalog import discover_runs
 
 ASSETS = Path(__file__).with_name("dashboard_assets")
 
@@ -49,6 +50,16 @@ def tail(path, limit=20000):
 
 
 def snapshot(root):
+    campaign = read_json(root / "campaign.json")
+    if campaign:
+        runs = []
+        for stage in campaign["stages"]:
+            stage_root = Path(stage["root"])
+            runs.extend(dict(run, stage=stage["label"], queue_root=str(stage_root))
+                        for run in snapshot(stage_root)["runs"])
+        return dict(batch={k: v for k, v in campaign.items() if k != "stages"}, runs=runs,
+                    control=read_json(root / "queue-control.json", {}),
+                    server_utc=datetime.now(timezone.utc).isoformat(), root=str(root))
     manifest = read_json(root / "batch.json", {})
     runs = []
     for entry in manifest.get("runs", []):
@@ -115,24 +126,26 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path in ("/", "/app.js", "/style.css"):
-            name = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css"}[parsed.path]
+        if parsed.path in ("/", "/models", "/app.js", "/style.css"):
+            name = {"/": "index.html", "/models": "index.html", "/app.js": "app.js", "/style.css": "style.css"}[parsed.path]
             content_type = {"index.html": "text/html; charset=utf-8", "app.js": "text/javascript; charset=utf-8", "style.css": "text/css; charset=utf-8"}[name]
             return self.send((ASSETS / name).read_bytes(), content_type)
         if parsed.path == "/api/state":
             state = snapshot(self.server.root)
             state["gpu"] = self.server.gpu()
+            state["models"] = discover_runs()
             return self.send(state)
         query = parse_qs(parsed.query)
         profile = query.get("profile", ["sparse"])[0]
-        manifest = read_json(self.server.root / "batch.json", {})
-        entry = next((e for e in manifest.get("runs", []) if e["profile"] == profile), None)
+        state = snapshot(self.server.root)
+        entry = next((e for e in state["runs"] if e["profile"] == profile), None)
         if not entry:
             return self.send(dict(error="Unknown run"), status=404)
+        queue_root = Path(entry.get("queue_root", self.server.root))
         if parsed.path == "/api/log":
-            return self.send(dict(text=tail(self.server.root / f"{profile}.log")))
+            return self.send(dict(text=tail(queue_root / f"{profile}.log")))
         if parsed.path == "/api/export":
-            directory = experiment_directory(self.server.root, entry)
+            directory = experiment_directory(queue_root, entry)
             kind = query.get("kind", ["metrics"])[0]
             allowed = {"config": "config.json", "episodes": "best-results-episodes.csv", "final-episodes": "final-results-episodes.csv"}
             if kind in allowed and directory and (directory / allowed[kind]).exists():
@@ -158,6 +171,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path not in ("/api/pause-queue", "/api/resume-queue"):
             return self.send(dict(error="Unknown action"), status=404)
         value = dict(pause_after_current=self.path == "/api/pause-queue")
+        campaign = read_json(self.server.root / "campaign.json", {})
+        for stage in campaign.get("stages", []):
+            atomic_json(Path(stage["root"]) / "queue-control.json", value)
         atomic_json(self.server.root / "queue-control.json", value)
         self.send(value)
 
@@ -179,8 +195,8 @@ def main():
     parser.add_argument("--port", type=int, default=8770)
     args = parser.parse_args()
     root = args.root.resolve()
-    if not (root / "batch.json").exists():
-        parser.error("Prepare the comparison first; batch.json is missing")
+    if not any((root / name).exists() for name in ("batch.json", "campaign.json")):
+        parser.error("Prepare the queue or campaign first")
     server = DashboardServer(("127.0.0.1", args.port), root)
     print(f"Training dashboard: http://127.0.0.1:{args.port}/", flush=True)
     try:

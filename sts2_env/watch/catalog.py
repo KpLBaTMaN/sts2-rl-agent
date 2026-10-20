@@ -105,6 +105,36 @@ def discover_runs(output: Path | None = None) -> list[dict]:
         if not isinstance(config, dict) or config.get("task") not in {"act1", "full_run"}:
             continue
         runs.append(describe(directory, config, output))
+    # Include prepared attempts before a trainer creates their experiment folder.
+    # The Model player and dashboard share this catalog, so queued runs appear in both.
+    from sts2_env.training.comparison import experiment_directory
+    indexed = {run["id"]: run for run in runs}
+    for batch_path in output.rglob("batch.json"):
+        batch = read_json(batch_path) or {}
+        if batch.get("smoke"):
+            continue
+        queue = batch_path.parent
+        for entry in batch.get("runs", []):
+            for abandoned in entry.get("abandoned", []):
+                try:
+                    abandoned_id = Path(abandoned).relative_to(output).as_posix()
+                except ValueError:
+                    continue
+                if abandoned_id in indexed:
+                    indexed[abandoned_id]["status"] = "abandoned"
+            directory = experiment_directory(queue, entry)
+            existing = indexed.get(directory.relative_to(output).as_posix()) if directory else None
+            if existing and existing["status"] != "abandoned":
+                continue
+            if entry.get("status") not in {"queued", "running", "failed"}:
+                continue
+            config = read_json(Path(entry["config"]))
+            if not config or config.get("task") not in {"act1", "full_run"}:
+                continue
+            placeholder = describe(queue / "runs" / entry["name"], config, output)
+            placeholder.update(id="queued:" + placeholder["id"], status=entry["status"], steps=0,
+                               queued=True, path=None)
+            runs.append(placeholder)
     return sorted(runs, key=lambda run: (run["group"], run["id"]))
 
 

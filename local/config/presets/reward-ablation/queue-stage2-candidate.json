@@ -1,0 +1,8 @@
+{
+  "title": "Reward ablation \u00b7 upgrade replication (3 x 1M decisions)",
+  "runs": [
+    "2-replicate-upgrade-s42.json",
+    "2-replicate-upgrade-s43.json",
+    "2-replicate-upgrade-s44.json"
+  ]
+}

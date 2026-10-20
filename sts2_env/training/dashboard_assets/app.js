@@ -12,7 +12,47 @@ const get = (o,path) => path.split('.').reduce((a,k)=>a?.[k],o);
 const last = a => a?.[a.length-1];
 const flatten = (o,p='') => Object.entries(o).flatMap(([k,v])=>v&&typeof v==='object'&&!Array.isArray(v)?flatten(v,p+k+'.'):[[p+k,v]]);
 let state, frozen=false, busy=false, activeTab='overview', lastLogProfile='', lastConfigKey='', charts=[];
-const visible = new Set(Object.keys(colors));
+const visible = new Set();
+const knownProfiles = new Set();
+let experimentSignature='';
+function syncExperiments(){
+  const signature=state.runs.map(r=>r.profile).join('|');
+  if(signature===experimentSignature)return;
+  experimentSignature=signature;
+  const palette=['#66dfba','#f2b16e','#b4a0ff','#79bfff','#f190bc','#d1d977','#7fd6e3','#d4ad86'];
+  state.runs.forEach((r,i)=>{
+    colors[r.profile]??=palette[i%palette.length];
+    titles[r.profile]??=r.name.replace(/-/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+    const reward=r.config.reward;
+    descriptions[r.profile]??=`${reward.profile} · HP ${reward.hp} · upgrade ${reward.upgrade} · seed ${r.config.training.model_seed}`;
+    if(!knownProfiles.has(r.profile)){knownProfiles.add(r.profile);visible.add(r.profile);}
+  });
+  for(const id of ['config-run','log-run','export-run']){
+    const selected=$(id).value;
+    $(id).innerHTML=state.runs.map(r=>`<option value="${esc(r.profile)}">${esc(titles[r.profile])}</option>`).join('');
+    if(state.runs.some(r=>r.profile===selected))$(id).value=selected;
+  }
+  $('experiment-legend').innerHTML=state.runs.map(r=>`<label><input type="checkbox" data-profile="${esc(r.profile)}" ${visible.has(r.profile)?'checked':''}><span class="swatch" data-color="${esc(r.profile)}"></span>${esc(titles[r.profile])}</label>`).join('');
+  document.querySelectorAll('[data-profile]').forEach(b=>b.onchange=()=>{b.checked?visible.add(b.dataset.profile):visible.delete(b.dataset.profile);drawCharts();});
+  lastConfigKey='';
+}
+function applyColors(){
+  document.querySelectorAll('[data-color]').forEach(e=>{e.style.backgroundColor=colors[e.dataset.color];});
+  document.querySelectorAll('[data-text-color]').forEach(e=>{e.style.color=colors[e.dataset.textColor];});
+}
+function resultSeeds(run,final){
+  const e=run.config.evaluation,pool=final&&(e.final_seeds?.length)?e.final_seeds:e.seeds;
+  return pool?.length?`${pool[0]}–${pool[pool.length-1]}`:'training seeds';
+}
+function renderModels(){
+  if(!state)return;
+  const which=$('model-results').value;
+  let group=null;
+  $('model-library').innerHTML=(state.models||[]).map(r=>{
+    const s=r.results[which],header=r.group!==group?`<tr><td colspan="12" class="library-group">${esc(r.group)}</td></tr>`:'';group=r.group;
+    return header+`<tr><td>${esc(r.name)}</td><td>${esc(r.status)}</td><td>${esc(r.reward.profile)}</td><td>${r.model_seed??'—'}</td><td>${nf.format(r.steps??0)} / ${compact(r.target_steps||0)}</td><td>${s?`${s.wins}/${s.episodes} (${pct(s.win_rate)})`:'—'}</td><td>${num(s?.average_floor)}</td><td>${pct(s?.boss_conversion_rate)}</td><td>${s?.timeouts??'—'} / ${s?.stalls??'—'}</td><td>${num(s?.upgraded_cards)}</td><td>${s?esc(r.seeds[which]):'—'}</td><td>${['best','final'].filter(k=>r.models[k]).join(' + ')||'Pending'}</td></tr>`;
+  }).join('');
+}
 const metrics = {
   train_win_rate:['Training win rate','Rolling mean of the last 200 completed training episodes; exploratory actions.','percent'],
   floor:['Training floor reached','Rolling mean floor over the last 200 completed training episodes.','number'],
@@ -52,14 +92,19 @@ function trainingActivity(run){
 }
 function render(){
   if(!state) return;
+  syncExperiments();
   const runs=state.runs,active=runs.find(r=>r.status==='running'),selected=active||[...runs].reverse().find(r=>r.status==='completed');
+  $('experiment-title').textContent=state.batch.title||'Training experiments';
+  $('experiment-subtitle').textContent=`${runs.length} experiments · fixed configurations · sequential training and automatic results`;
+  $('experiment-facts').textContent=`IRONCLAD · ASCENSION 0     /     ${state.batch.model_format||'SPIREFORMER'}     /     ONE TRAINER AT A TIME`;
+  renderModels();
   const total=runs.reduce((n,r)=>n+r.config.training.total_timesteps,0),steps=runs.reduce((n,r)=>n+Math.min(currentSteps(r),r.config.training.total_timesteps),0);
   $('total-progress').textContent=pct(steps/total);$('overall-bar').value=steps/total*100;
   $('progress-caption').textContent=`${nf.format(steps)} / ${nf.format(total)} decisions`;
   $('batch-state').textContent=state.batch.status;$('batch-state').className='pill '+state.batch.status;
   $('active-run').textContent=active?titles[active.profile]:state.batch.status==='completed'?'Complete':state.batch.status==='paused'?'Queue paused':state.batch.status==='failed'?'Stopped':'Waiting';
   const live=active?.live;
-  $('active-caption').textContent=active?(live.kind==='evaluating'?`${live.label} evaluation · ${live.completed} / ${live.episodes}`:live.kind==='starting'?'Building rollout buffers':live.steps?`${nf.format(currentSteps(active))} decisions · ${live.kind}`:'Initialising / random baseline'):state.batch.status==='completed'?'All three profiles evaluated':'One model trains at a time';
+  $('active-caption').textContent=active?(live.kind==='evaluating'?`${live.label} evaluation · ${live.completed} / ${live.episodes}`:live.kind==='starting'?'Building rollout buffers':live.steps?`${nf.format(currentSteps(active))} decisions · ${live.kind}`:'Initialising / random baseline'):state.batch.status==='completed'?`${runs.length} experiments evaluated`:'One model trains at a time';
   const summary=selected&&(selected.best||validation(selected));
   $('validation-win').textContent=pct(summary?.win_rate);
   $('validation-caption').textContent=summary?`${titles[selected.profile]} · ${summary.wins} / ${summary.episodes} ${selected.best?'final test':'validation'} wins`:'First validation after 250K decisions';
@@ -79,29 +124,33 @@ function render(){
     const n=currentSteps(r),goal=r.config.training.total_timesteps,percent=Math.min(n/goal,1)*100;
     const activity=trainingActivity(r);
     const label=r.status==='running'?(r.live.kind==='evaluating'?'Evaluating':'Training'):r.status;
-    return `<button class="run-card ${r.status==='running'?'active':''}" data-inspect="${r.profile}" title="Inspect ${titles[r.profile]} variables"><div class="run-card-top"><span class="run-name"><span class="run-number">0${i+1}</span><span class="${r.profile}-text">${titles[r.profile]}</span></span><span class="run-state">${esc(label)}</span></div><div class="run-description">${descriptions[r.profile]}</div><div class="run-bottom"><span>${compact(n)} / ${compact(goal)} decisions</span><strong>${percent.toFixed(1)}%</strong></div><div class="bar"><span class="${r.profile}" data-progress="${percent}"></span></div><div class="run-activity">${Number.isFinite(activity.completed)?nf.format(activity.completed):'—'} game runs · ${num(activity.recentDecisions)} decisions/run (recent)</div></button>`;
+    return `<button class="run-card ${r.status==='running'?'active':''}" data-inspect="${r.profile}" title="Inspect ${titles[r.profile]} variables"><div class="run-card-top"><span class="run-name"><span class="run-number">${String(i+1).padStart(2,'0')}</span><span data-text-color="${r.profile}">${titles[r.profile]}</span></span><span class="run-state">${esc(label)}</span></div><div class="run-description">${descriptions[r.profile]}</div><div class="run-bottom"><span>${compact(n)} / ${compact(goal)} decisions</span><strong>${percent.toFixed(1)}%</strong></div><div class="bar"><span class="${r.profile}" data-color="${r.profile}" data-progress="${percent}"></span></div><div class="run-activity">${Number.isFinite(activity.completed)?nf.format(activity.completed):'—'} game runs · ${num(activity.recentDecisions)} decisions/run (recent)</div></button>`;
   }).join('');
   document.querySelectorAll('[data-inspect]').forEach(b=>b.onclick=()=>{$('config-run').value=b.dataset.inspect;switchTab('variables');renderVariables();});
   document.querySelectorAll('[data-progress]').forEach(b=>{b.style.width=b.dataset.progress+'%';});
+  applyColors();
   $('activity-body').innerHTML=runs.map(r=>{
     const a=trainingActivity(r);
-    return `<tr><td><span class="row-label"><i class="swatch ${r.profile}"></i>${titles[r.profile]}</span></td><td>${nf.format(currentSteps(r))}</td><td>${Number.isFinite(a.completed)?nf.format(a.completed):'—'}</td><td>${num(a.recentDecisions)}</td><td>${Number.isFinite(a.runsPerHour)?nf.format(Math.round(a.runsPerHour)):'—'}</td><td>${num(a.floor)}</td></tr>`;
+    return `<tr><td><span class="row-label"><i class="swatch" data-color="${r.profile}"></i>${titles[r.profile]}</span></td><td>${nf.format(currentSteps(r))}</td><td>${Number.isFinite(a.completed)?nf.format(a.completed):'—'}</td><td>${num(a.recentDecisions)}</td><td>${Number.isFinite(a.runsPerHour)?nf.format(Math.round(a.runsPerHour)):'—'}</td><td>${num(a.floor)}</td></tr>`;
   }).join('');
   $('comparison-body').innerHTML=runs.map(r=>{
     const s=r.best||validation(r),source=r.best?'Best checkpoint on separate final holdout seeds':'Latest periodic validation (checkpoint selection seeds)';
-    return `<tr title="${source}"><td><span class="row-label"><i class="swatch ${r.profile}"></i>${titles[r.profile]}</span></td><td><span class="status-label">${esc(r.status)}</span></td><td>${nf.format(currentSteps(r))}</td><td>${pct(s?.win_rate)}</td><td>${num(s?.average_floor)}</td><td>${pct(s?.boss_reached_rate)}</td><td>${num(s?.average_winning_hp)}</td><td>${s?.timeouts??'—'} / ${s?.stalls??'—'}</td><td>${r.checkpoints.length}</td></tr>`;
+    return `<tr title="${source}"><td><span class="row-label"><i class="swatch" data-color="${r.profile}"></i>${titles[r.profile]}</span></td><td><span class="status-label">${esc(r.status)}</span></td><td>${nf.format(currentSteps(r))}</td><td>${pct(s?.win_rate)}</td><td>${num(s?.average_floor)}</td><td>${pct(s?.boss_reached_rate)}</td><td>${num(s?.average_winning_hp)}</td><td>${s?.timeouts??'—'} / ${s?.stalls??'—'}</td><td>${r.checkpoints.length}</td><td>${esc(resultSeeds(r,Boolean(r.best)))}</td></tr>`;
   }).join('');
+  applyColors();
   const gpu=state.gpu;
   $('hardware').textContent=gpu?.name?`${gpu.name} · ${gpu.utilization}% GPU · ${num(gpu.memory_used/1024,1)} / ${num(gpu.memory_total/1024,1)} GB · ${gpu.temperature}°C`:'GPU telemetry unavailable';
   $('output-location').title=state.root;
   $('last-update').textContent=`Updated ${new Date(state.server_utc).toLocaleTimeString('en-GB')} · every 5s`;
-  if(activeTab==='variables')renderVariables();
+  if(activeTab==='variables'){renderVariables();applyColors();}
   if(activeTab==='overview'&&!frozen)drawCharts();
 }
 
 function renderVariables(){
   if(!state)return;
   const runs=state.runs,terms={win:'Once the Act 1 boss is defeated',death:'Once on death',timeout:'Once on decision limit',floor:'Per new floor reached',hp:'Change in curved HP fraction',elite:'Per elite victory',enemy_damage:'Fraction of enemy HP removed per combat',max_hp:'Per maximum HP point changed',relic:'Per relic gained',gold:'Per gold gained',upgrade:'Per completed permanent upgrade, once per card',combat_turn:'Per combat turn after the first',hp_curve:'HP reward function'};
+  const headings=$('reward-profile-headings');
+  headings.innerHTML='<th>REWARD TERM</th>'+runs.map(r=>`<th data-text-color="${r.profile}">${esc(titles[r.profile])}</th>`).join('')+'<th>WHEN IT IS PAID</th>';
   $('weights-body').innerHTML=Object.entries(terms).map(([key,note])=>`<tr><td>${esc(key)}</td>${runs.map(r=>`<td class="${r.profile}-text">${esc(r.config.reward[key] ?? 0)}</td>`).join('')}<td>${note}</td></tr>`).join('');
   const run=runs.find(r=>r.profile===$('config-run').value),query=$('search-config').value.toLowerCase();
   const key=run.profile+'|'+query;if(key===lastConfigKey)return;lastConfigKey=key;
@@ -153,12 +202,12 @@ function drawCharts(){
   $('win-eyebrow').textContent=evaluation?'GENERALISATION':'LEARNING';
   $('win-source-tag').textContent=evaluation?'VALIDATION · 50 SEEDS':'TRAINING · LAST 200 EPISODES';
   $('floor-source-tag').textContent=evaluation?'VALIDATION · AVG FLOOR':'TRAINING · AVG FLOOR';
-  $('win-description').textContent=evaluation?'Deterministic evaluation on the same reserved seeds for every profile.':'Rolling win rate over the last 200 completed exploratory training episodes.';
+  $('win-description').textContent=evaluation?'Deterministic validation. Seed pools and budgets are recorded in each experiment configuration.':'Rolling win rate over the last 200 completed exploratory training episodes.';
   $('floor-description').textContent=evaluation?'Floor reached during evaluation, including unsuccessful attempts.':'Rolling average floor over the last 200 completed training episodes.';
   draw('win-chart',series(evaluation?'win_rate':'train_win_rate',evaluation),{percent:true});draw('floor-chart',series(evaluation?'average_floor':'floor',evaluation));
   const key=$('metric').value;draw('metric-chart',series(key),{percent:metrics[key][2]==='percent'});$('metric-description').textContent=metrics[key][1];
 }
-function switchTab(tab){activeTab=tab;document.querySelectorAll('.view').forEach(v=>v.hidden=v.id!==tab);document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('selected',b.dataset.tab===tab));if(tab==='variables')renderVariables();if(tab==='overview')drawCharts();if(tab==='logs')loadLog();}
+function switchTab(tab){activeTab=tab;document.querySelectorAll('.view').forEach(v=>v.hidden=v.id!==tab);document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('selected',b.dataset.tab===tab));if(tab==='variables')renderVariables();if(tab==='overview')drawCharts();if(tab==='logs')loadLog();if(tab==='models')renderModels();applyColors();}
 async function loadLog(){
   const profile=$('log-run').value;
   try{const response=await fetch('/api/log?profile='+profile);if(!response.ok)throw Error(response.status);const log=await response.json();$('log-text').textContent=log.text;if($('follow-log').checked||lastLogProfile!==profile)$('log-text').scrollTop=$('log-text').scrollHeight;lastLogProfile=profile;}catch(e){$('log-text').textContent='Could not load log: '+e.message;}
@@ -173,9 +222,11 @@ document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>switchTab(b.dat
 document.querySelectorAll('[data-profile]').forEach(b=>b.onchange=()=>{b.checked?visible.add(b.dataset.profile):visible.delete(b.dataset.profile);drawCharts();});
 for(const id of ['range','smoothing','metric','curve-source'])$(id).onchange=drawCharts;
 $('freeze').onclick=()=>{frozen=!frozen;$('freeze').textContent=frozen?'Resume charts':'Freeze charts';if(!frozen)drawCharts();};
+$('model-results').onchange=renderModels;
 $('config-run').onchange=renderVariables;$('search-config').oninput=renderVariables;$('log-run').onchange=loadLog;
 $('download-metrics').onclick=()=>{const profile=$('export-run').value;window.location.href='/api/export?kind=metrics&profile='+profile;};
 $('download-config').onclick=()=>{window.location.href='/api/export?kind=config&profile='+$('config-run').value;};
 $('pause-queue').onclick=async()=>{const path=state.control.pause_after_current?'/api/resume-queue':'/api/pause-queue';$('pause-queue').disabled=true;try{const response=await fetch(path,{method:'POST',headers:{'X-Dashboard-Request':'1'}});if(!response.ok)throw Error('HTTP '+response.status);await refresh();}catch(e){alert('Queue control failed: '+e.message);$('pause-queue').disabled=false;}};
 window.addEventListener('resize',()=>{if(state&&activeTab==='overview'&&!frozen)drawCharts();});
+if(window.location.pathname==='/models')switchTab('models');
 refresh();setInterval(refresh,5000);
